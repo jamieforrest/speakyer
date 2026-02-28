@@ -89,44 +89,32 @@ class TestAudioClipperBoundaries:
     def setup_method(self):
         self.clipper = AudioClipper(padding_ms=100)
 
-    def test_word_level_match(self):
+    def test_uses_full_segment_bounds(self):
         transcript = make_transcript(seg_start=0.0, seg_end=2.5)
-        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5, "Welt")
-        # Word: start=0.5s → 500ms - 100 pad = 400ms; end=1.0s → 1000ms + 100 = 1100ms
-        assert start_ms == 400
-        assert end_ms == 1100
-
-    def test_segment_fallback_when_no_word_match(self):
-        transcript = make_transcript(seg_start=0.0, seg_end=2.5)
-        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5, "unbekannt")
-        # Fallback to segment: 0ms - 100 pad = 0 (clamped); 2500ms + 100 = 2600ms
+        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5)
+        # Segment: 0ms - 100 pad = 0 (clamped); 2500ms + 100 = 2600ms
         assert start_ms == 0
         assert end_ms == 2600
 
     def test_segment_not_found_uses_raw_times(self):
         transcript = make_transcript(seg_start=5.0, seg_end=7.0)
         # Ask for boundaries of a different segment that doesn't exist in transcript
-        start_ms, end_ms = self.clipper._boundaries(transcript, 10.0, 12.0, "Welt")
+        start_ms, end_ms = self.clipper._boundaries(transcript, 10.0, 12.0)
         assert start_ms == 9900   # 10000 - 100
         assert end_ms == 12100    # 12000 + 100
 
     def test_start_ms_clamped_to_zero(self):
-        # Word very close to start of audio
-        words = [WordTimestamp(word="Welt", start=0.05, end=0.5, probability=0.99)]
-        transcript = make_transcript(seg_start=0.0, seg_end=1.0, words=words)
-        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 1.0, "Welt")
+        # Segment very close to start of audio
+        transcript = make_transcript(seg_start=0.0, seg_end=1.0)
+        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 1.0)
         assert start_ms == 0  # clamped, not negative
-
-    def test_case_insensitive_surface_match(self):
-        words = [WordTimestamp(word="welt", start=0.5, end=1.0, probability=0.99)]
-        transcript = make_transcript(seg_start=0.0, seg_end=2.5, words=words)
-        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5, "WELT")
-        assert start_ms == 400
         assert end_ms == 1100
 
-    def test_empty_word_list_falls_back_to_segment(self):
-        transcript = make_transcript(seg_start=0.0, seg_end=2.5, words=[])
-        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5, "Welt")
+    def test_segment_with_words_still_uses_segment_bounds(self):
+        words = [WordTimestamp(word="Welt", start=0.5, end=1.0, probability=0.99)]
+        transcript = make_transcript(seg_start=0.0, seg_end=2.5, words=words)
+        start_ms, end_ms = self.clipper._boundaries(transcript, 0.0, 2.5)
+        # Should use full segment, not word boundaries
         assert start_ms == 0
         assert end_ms == 2600
 

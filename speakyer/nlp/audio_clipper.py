@@ -98,7 +98,6 @@ class AudioClipper:
             transcript,
             seg_start=row["seg_start"],
             seg_end=row["seg_end"],
-            surface=row["surface_form"],
         )
         return self._write_clip(audio_path, start_ms, end_ms, word_id)
 
@@ -136,16 +135,12 @@ class AudioClipper:
         transcript: Transcript,
         seg_start: float,
         seg_end: float,
-        surface: str,
     ) -> tuple[int, int]:
         """Return ``(start_ms, end_ms)`` for the clip.
 
-        Strategy:
-        1. Find the matching transcript segment by start/end proximity.
-        2. Search its word-level timestamps for *surface* (case-insensitive).
-        3. Fall back to the full segment if no word-level match is found.
-
-        All results are expanded by ``self.padding_ms`` on each side.
+        Finds the matching transcript segment by start/end proximity and returns
+        the full segment boundaries expanded by ``self.padding_ms`` on each side,
+        so the clip covers the entire displayed sentence.
         """
         seg = next(
             (
@@ -162,15 +157,7 @@ class AudioClipper:
             end_ms = int(seg_end * 1000) + self.padding_ms
             return start_ms, end_ms
 
-        # Try word-level match first (most precise).
-        target = surface.strip().lower()
-        for w in seg.words:
-            if w.word.strip().lower() == target:
-                start_ms = max(0, int(w.start * 1000) - self.padding_ms)
-                end_ms = int(w.end * 1000) + self.padding_ms
-                return start_ms, end_ms
-
-        # Fallback: full segment with padding.
+        # Use the full segment so the clip covers the whole displayed sentence.
         start_ms = max(0, int(seg.start * 1000) - self.padding_ms)
         end_ms = int(seg.end * 1000) + self.padding_ms
         return start_ms, end_ms
