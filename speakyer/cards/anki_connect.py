@@ -142,7 +142,12 @@ class AnkiConnectExporter(CardExporter):
         parts.append(row["source_name"])
         if row["episode_title"]:
             parts.append(f"<i>{row['episode_title']}</i>")
-        return " · ".join(parts)
+        lemma_enc = row["lemma"].replace(" ", "+")
+        lookup = (
+            f'<br><a href="https://www.linguee.com/german-english/search?query={lemma_enc}">linguee</a>'
+            f' · <a href="https://www.dict.cc/?s={lemma_enc}">dict.cc</a>'
+        )
+        return " · ".join(parts) + lookup
 
     @staticmethod
     def _build_tags(row) -> list[str]:
