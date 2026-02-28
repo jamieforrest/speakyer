@@ -4,8 +4,9 @@ Podcast vocabulary learning pipeline for German learners. Speakyer downloads
 podcast episodes, transcribes them with Whisper, extracts vocabulary tagged by
 CEFR level (A1–C2), and pushes flashcards to Anki.
 
-**Current status:** Milestone 0 — project foundation. The pipeline is not yet
-implemented. See the [milestone plan](#milestones) below.
+**Current status:** Milestone 1 — source configuration and audio download.
+Transcription and card generation are coming in subsequent milestones.
+See the [milestone plan](#milestones) below.
 
 ---
 
@@ -72,9 +73,11 @@ This creates `speakyer.db` and shows the empty schema.
 ## Running
 
 ```bash
-speakyer run                        # process all active sources
-speakyer run --source tagesschau    # one source only
-speakyer run --dry-run              # preview without writing
+python scripts/run_pipeline.py                         # all active sources
+python scripts/run_pipeline.py --source tagesschau    # one source only
+python scripts/run_pipeline.py --dry-run              # preview without writing
+python scripts/run_pipeline.py --stage download       # up to download stage only
+python scripts/list_episodes.py                       # check what was fetched
 ```
 
 ---
@@ -86,11 +89,11 @@ speakyer run --dry-run              # preview without writing
 ```yaml
 sources:
   - name: tagesschau
-    rss_url: https://www.tagesschau.de/multimedia/podcast/ts100s.xml
+    rss_url: https://www.tagesschau.de/multimedia/sendung/tagesschau_20_uhr/podcast-ts2000-audio-100~podcast.xml
     language: de
     active: true
 
-  - name: deutschlandfunk
+  - name: deutschlandfunk-nachrichten
     rss_url: https://www.deutschlandfunk.de/podcast-nachrichten.3184.de.podcast.xml
     language: de
     active: false
@@ -145,7 +148,7 @@ These scripts evolve alongside the milestones as new data is available.
 | Milestone | Description | Status |
 |---|---|---|
 | 0 | Project foundation: schema, config, storage abstraction | ✅ Done |
-| 1 | Source configuration & audio download | Pending |
+| 1 | Source configuration & audio download | ✅ Done |
 | 2 | Whisper transcription (local, Apple Silicon) | Pending |
 | 3 | German NLP pipeline + CEFR vocabulary tagging | Pending |
 | 4 | Anki card generation | Pending |

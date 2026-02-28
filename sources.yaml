@@ -1,0 +1,15 @@
+# Podcast sources for Speakyer.
+# Each entry is synced to the `sources` table on startup.
+# Add new podcasts here and run `speakyer run` to pick them up automatically.
+
+sources:
+  - name: tagesschau
+    rss_url: https://www.tagesschau.de/multimedia/sendung/tagesschau_20_uhr/podcast-ts2000-audio-100~podcast.xml
+    language: de
+    active: true
+
+  # Uncomment when ready to add:
+  # - name: deutschlandfunk-nachrichten
+  #   rss_url: https://www.deutschlandfunk.de/podcast-nachrichten.3184.de.podcast.xml
+  #   language: de
+  #   active: false
