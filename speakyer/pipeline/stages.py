@@ -612,7 +612,8 @@ class CardUpdateStage(PipelineStage):
             return ctx
 
         storage = LocalStorage(config.data_dir)
-        print(f"  Updating {len(rows)} Anki note(s) with audio ...")
+        total = len(rows)
+        print(f"  Updating {total} Anki note(s) with audio ...")
         updated = failed = 0
 
         for row in rows:
@@ -641,6 +642,8 @@ class CardUpdateStage(PipelineStage):
                         (row["card_id"],),
                     )
                 updated += 1
+                if updated % 50 == 0:
+                    print(f"    ... {updated}/{total}")
             except ConnectionError as exc:
                 print(f"  [error] {exc}")
                 return ctx
