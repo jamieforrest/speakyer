@@ -32,8 +32,15 @@ def _invoke(action: str, url: str, *, timeout: int = 10, **params) -> object:
         )
     resp.raise_for_status()
     body = resp.json()
-    if body.get("error"):
-        raise RuntimeError("AnkiConnect error: %s" % body["error"])
+    error = body.get("error")
+    if error:
+        if isinstance(error, list):
+            # addNotes returns a list of per-note error strings when some notes
+            # are rejected (e.g. duplicates). The result array still contains
+            # valid note IDs (null for rejected notes) — not a fatal error.
+            pass
+        else:
+            raise RuntimeError("AnkiConnect error: %s" % error)
     return body["result"]
 
 
