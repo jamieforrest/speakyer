@@ -16,11 +16,16 @@ _DEFAULT_URL = "http://localhost:8765"
 _API_VERSION = 6
 
 
-def _invoke(action: str, url: str, **params) -> object:
+def _invoke(action: str, url: str, *, timeout: int = 10, **params) -> object:
     payload = {"action": action, "version": _API_VERSION, "params": params}
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-    except requests.exceptions.ConnectionError:
+        resp = requests.post(url, json=payload, timeout=timeout)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        if isinstance(exc, requests.exceptions.Timeout):
+            raise ConnectionError(
+                "Request to AnkiConnect at %s timed out.\n"
+                "Try reducing batch size or restarting Anki." % url
+            )
         raise ConnectionError(
             "Could not connect to AnkiConnect at %s.\n"
             "Make sure Anki is running and the AnkiConnect add-on (2055492159) is installed." % url
@@ -56,6 +61,9 @@ class AnkiConnectExporter(CardExporter):
     # Main entry point used by ExportStage
     # ------------------------------------------------------------------
 
+    BATCH_SIZE = 50  # notes per addNotes call
+    BATCH_TIMEOUT = 30  # seconds per batch request
+
     def export_rows(self, rows: list) -> list[int]:
         """Push a batch of enriched card rows to Anki.
 
@@ -65,15 +73,23 @@ class AnkiConnectExporter(CardExporter):
         source_name, published_at).
 
         Returns a list of Anki note IDs in the same order as *rows*.
+        Sends notes in batches of :attr:`BATCH_SIZE` to avoid HTTP timeouts.
         """
         self._ensure_deck(rows[0]["deck_name"] if rows else "Speakyer")
 
         notes = [self._build_note(row) for row in rows]
-        note_ids: list = _invoke("addNotes", self.url, notes=notes)  # type: ignore[assignment]
+        all_ids: list[int] = []
 
-        # addNotes returns null for notes that were rejected (e.g. duplicate).
-        # Replace None entries with 0 so callers always get an int list.
-        return [nid or 0 for nid in note_ids]
+        for start in range(0, len(notes), self.BATCH_SIZE):
+            batch = notes[start : start + self.BATCH_SIZE]
+            end = min(start + self.BATCH_SIZE, len(notes))
+            print(f"    ... batch {start + 1}–{end} of {len(notes)}", flush=True)
+            result: list = _invoke(  # type: ignore[assignment]
+                "addNotes", self.url, timeout=self.BATCH_TIMEOUT, notes=batch
+            )
+            all_ids.extend(nid or 0 for nid in result)
+
+        return all_ids
 
     # ------------------------------------------------------------------
     # Helpers
