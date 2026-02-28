@@ -10,7 +10,13 @@ Usage:
     python scripts/run_pipeline.py --stage transcribe    # up to transcribe stage
     python scripts/run_pipeline.py --stage nlp           # up to NLP/CEFR tagging
     python scripts/run_pipeline.py --stage cards         # up to card generation
+    python scripts/run_pipeline.py --stage audio-clip    # up to audio clip extraction
     python scripts/run_pipeline.py --stage export        # up to Anki export (requires Anki running)
+
+    # Add audio clips to existing Anki cards (requires Anki running):
+    python scripts/run_pipeline.py --pipeline audio-update
+    python scripts/run_pipeline.py --pipeline audio-update --episode-id 1
+    python scripts/run_pipeline.py --pipeline audio-update --source tagesschau
 
     # Override the Whisper model for this run (faster models for development):
     python scripts/run_pipeline.py --whisper-model mlx-community/whisper-small-mlx
@@ -33,7 +39,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import speakyer.config as _cfg_module
 from speakyer.database import init
 from speakyer.pipeline.base import PipelineContext
-from speakyer.pipeline.stages import CardGenStage, DownloadStage, ExportStage, NLPStage, TranscribeStage
+from speakyer.pipeline.stages import (
+    AudioClipStage,
+    CardGenStage,
+    CardUpdateStage,
+    DownloadStage,
+    ExportStage,
+    NLPStage,
+    TranscribeStage,
+    AUDIO_UPDATE_PIPELINE,
+)
 from speakyer.sources.loader import (
     get_episode_by_id,
     get_known_guids,
@@ -49,6 +64,7 @@ STAGES = {
     "transcribe": TranscribeStage,
     "nlp": NLPStage,
     "cards": CardGenStage,
+    "audio-clip": AudioClipStage,
     "export": ExportStage,
 }
 
@@ -59,8 +75,65 @@ STAGE_PENDING_STATUSES = {
     "transcribe": {"fetched", "downloaded"},
     "nlp": {"fetched", "downloaded", "transcribed"},
     "cards": {"fetched", "downloaded", "transcribed", "analyzed"},
+    "audio-clip": {"fetched", "downloaded", "transcribed", "analyzed", "cards_pending"},
     "export": {"fetched", "downloaded", "transcribed", "analyzed", "cards_pending"},
 }
+
+
+def _run_audio_update_pipeline(args) -> None:
+    """Run AudioClipStage + CardUpdateStage across episodes with exported cards."""
+    from speakyer.database import db
+    from speakyer.sources.base import Episode, SourceConfig
+
+    with db() as conn:
+        ep_rows = conn.execute(
+            """
+            SELECT DISTINCT e.id, e.guid, e.title, e.audio_path, e.status,
+                            e.source_id,
+                            s.name AS source_name, s.rss_url,
+                            s.language, s.transcript_strategy, s.active
+            FROM episodes e
+            JOIN words w ON w.episode_id = e.id
+            JOIN cards c ON c.word_id = w.id
+            JOIN sources s ON s.id = e.source_id
+            WHERE c.status IN ('pending', 'exported')
+            ORDER BY e.id
+            """
+        ).fetchall()
+
+    if args.episode_id:
+        ep_rows = [r for r in ep_rows if r["id"] == args.episode_id]
+    if args.source:
+        ep_rows = [r for r in ep_rows if r["source_name"] == args.source]
+
+    if not ep_rows:
+        print("No episodes with cards found.")
+        return
+
+    stages = [cls() for cls in AUDIO_UPDATE_PIPELINE]
+    print(f"Running audio-update pipeline for {len(ep_rows)} episode(s)...")
+
+    for row in ep_rows:
+        ep = Episode(
+            id=row["id"],
+            guid=row["guid"],
+            source_id=row["source_id"],
+            title=row["title"],
+            audio_path=row["audio_path"],
+            status=row["status"],
+        )
+        source = SourceConfig(
+            id=row["source_id"],
+            name=row["source_name"],
+            rss_url=row["rss_url"],
+            language=row["language"],
+            transcript_strategy=row["transcript_strategy"],
+            active=bool(row["active"]),
+        )
+        print(f"\n[{source.name}] {ep.title!r}")
+        ctx = PipelineContext(source_config=source, episode=ep, dry_run=args.dry_run)
+        for stage in stages:
+            ctx = stage.run(ctx)
 
 
 def main() -> None:
@@ -80,6 +153,11 @@ def main() -> None:
         metavar="MODEL",
         help="Override the Whisper model for this run (e.g. mlx-community/whisper-small-mlx)",
     )
+    parser.add_argument(
+        "--pipeline",
+        choices=["audio-update"],
+        help="Run a named auxiliary pipeline instead of the main one",
+    )
     args = parser.parse_args()
 
     if args.whisper_model:
@@ -87,6 +165,10 @@ def main() -> None:
         print(f"Using Whisper model: {args.whisper_model}")
 
     init()
+
+    if args.pipeline == "audio-update":
+        _run_audio_update_pipeline(args)
+        return
 
     stage_names = list(STAGES)
     if args.stage:

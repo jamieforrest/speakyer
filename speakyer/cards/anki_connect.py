@@ -109,13 +109,25 @@ class AnkiConnectExporter(CardExporter):
         front = self._build_front(row)
         back = self._build_back(row)
         tags = self._build_tags(row)
-        return {
+        note: dict = {
             "deckName": row["deck_name"],
             "modelName": "Basic",
             "fields": {"Front": front, "Back": back},
             "tags": tags,
             "options": {"allowDuplicate": True},
         }
+        # Include audio attachment when ExportStage has pre-resolved the clip path.
+        # rows are converted to dicts by ExportStage before being passed here.
+        clip_path = row.get("audio_clip_abs_path") if isinstance(row, dict) else None
+        if clip_path:
+            note["audio"] = [
+                {
+                    "path": str(clip_path),
+                    "filename": f"speakyer_{row['word_id']}.mp3",
+                    "fields": ["Back"],
+                }
+            ]
+        return note
 
     @staticmethod
     def _build_front(row) -> str:

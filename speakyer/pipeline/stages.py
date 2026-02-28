@@ -6,10 +6,11 @@ from collections import Counter
 import requests
 
 from speakyer.cards.base import Card
-from speakyer.cards.anki_connect import AnkiConnectExporter
+from speakyer.cards.anki_connect import AnkiConnectExporter, _invoke
 from speakyer.config import config
 from speakyer.database import db
 from speakyer.exporters.base import CardExporter
+from speakyer.nlp.audio_clipper import AudioClipper
 from speakyer.nlp.base import NLPExtractor, Word
 from speakyer.pipeline.base import PipelineContext, PipelineStage
 from speakyer.storage import LocalStorage
@@ -414,6 +415,7 @@ class ExportStage(PipelineStage):
             rows = conn.execute(
                 """
                 SELECT c.id AS card_id, c.word_id, c.deck_name,
+                       c.audio_clip_path,
                        w.lemma, w.surface_form, w.pos, w.cefr_level,
                        w.example_sentence,
                        e.title AS episode_title, e.published_at,
@@ -432,9 +434,18 @@ class ExportStage(PipelineStage):
             print(f"  [dry-run] would export {len(rows)} card(s) for: {ep.title!r}")
             return ctx
 
-        print(f"  Exporting {len(rows)} card(s) to Anki ...")
+        # Convert to dicts and resolve audio clip paths to absolute before export.
+        storage = LocalStorage(config.data_dir)
+        enriched: list[dict] = []
+        for row in rows:
+            d = dict(row)
+            if d["audio_clip_path"]:
+                d["audio_clip_abs_path"] = str(storage.absolute_path(d["audio_clip_path"]))
+            enriched.append(d)
+
+        print(f"  Exporting {len(enriched)} card(s) to Anki ...")
         try:
-            note_ids = self.exporter.export_rows(rows)
+            note_ids = self.exporter.export_rows(enriched)
         except ConnectionError as exc:
             print(f"  [error] {exc}")
             return ctx
@@ -480,3 +491,164 @@ class ExportStage(PipelineStage):
             msg += f" ({failed} rejected — likely duplicates already in Anki)"
         print(msg)
         return ctx
+
+
+class AudioClipStage(PipelineStage):
+    """Extract audio clips for all pending cards belonging to an episode.
+
+    For each card whose ``audio_clip_path`` is NULL, calls
+    :class:`~speakyer.nlp.audio_clipper.AudioClipper` to extract a padded
+    MP3 segment and stores the relative path in ``cards.audio_clip_path``.
+
+    An injectable *clipper* enables testing without real audio files.
+    """
+
+    def __init__(self, clipper: AudioClipper | None = None) -> None:
+        self._clipper = clipper
+
+    @property
+    def clipper(self) -> AudioClipper:
+        if self._clipper is None:
+            self._clipper = AudioClipper()
+        return self._clipper
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        ep = ctx.episode
+
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id AS card_id, c.word_id
+                FROM cards c
+                JOIN words w ON c.word_id = w.id
+                WHERE w.episode_id = ? AND c.audio_clip_path IS NULL
+                  AND c.status IN ('pending', 'exported')
+                ORDER BY c.id
+                """,
+                (ep.id,),
+            ).fetchall()
+
+        if not rows:
+            print(f"  [skip] {ep.title!r}: no cards need audio clips")
+            return ctx
+
+        if ctx.dry_run:
+            print(f"  [dry-run] would extract {len(rows)} audio clip(s) for: {ep.title!r}")
+            return ctx
+
+        print(f"  Extracting {len(rows)} audio clip(s) for: {ep.title!r} ...")
+        extracted = skipped = 0
+        for row in rows:
+            clip_path = self.clipper.extract(row["word_id"])
+            if clip_path is None:
+                skipped += 1
+                continue
+            rel = str(clip_path.relative_to(self.clipper.storage.base_dir))
+            with db() as conn:
+                conn.execute(
+                    "UPDATE cards SET audio_clip_path = ? WHERE id = ?",
+                    (rel, row["card_id"]),
+                )
+            extracted += 1
+
+        msg = f"  Extracted {extracted} audio clip(s)"
+        if skipped:
+            msg += f" ({skipped} skipped — missing transcript or audio)"
+        print(msg)
+        return ctx
+
+
+class CardUpdateStage(PipelineStage):
+    """Push audio clips to existing Anki notes via AnkiConnect updateNote.
+
+    Processes exported cards for the episode that have a clip path but have
+    not yet been updated in Anki (``status = 'exported'``).  After a
+    successful update, the card status advances to ``'audio_updated'``.
+
+    An injectable *url* enables testing without a running Anki instance.
+    """
+
+    def __init__(self, url: str | None = None) -> None:
+        self._url = url
+
+    @property
+    def url(self) -> str:
+        return self._url or config.anki_connect_url
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        ep = ctx.episode
+
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id AS card_id, c.anki_note_id, c.audio_clip_path,
+                       w.lemma, w.surface_form, w.pos, w.cefr_level,
+                       w.example_sentence, c.deck_name,
+                       e.title AS episode_title,
+                       s.name AS source_name
+                FROM cards c
+                JOIN words w ON c.word_id = w.id
+                JOIN episodes e ON w.episode_id = e.id
+                JOIN sources s ON e.source_id = s.id
+                WHERE w.episode_id = ?
+                  AND c.anki_note_id IS NOT NULL
+                  AND c.audio_clip_path IS NOT NULL
+                  AND c.status = 'exported'
+                ORDER BY c.id
+                """,
+                (ep.id,),
+            ).fetchall()
+
+        if not rows:
+            print(f"  [skip] {ep.title!r}: no cards ready for audio update")
+            return ctx
+
+        if ctx.dry_run:
+            print(f"  [dry-run] would update {len(rows)} Anki note(s) for: {ep.title!r}")
+            return ctx
+
+        storage = LocalStorage(config.data_dir)
+        print(f"  Updating {len(rows)} Anki note(s) with audio ...")
+        updated = failed = 0
+
+        for row in rows:
+            try:
+                abs_clip = storage.absolute_path(row["audio_clip_path"])
+                filename = f"speakyer_{row['anki_note_id']}.mp3"
+                note_payload = {
+                    "id": row["anki_note_id"],
+                    "fields": {
+                        "Front": AnkiConnectExporter._build_front(row),
+                        "Back": AnkiConnectExporter._build_back(row),
+                    },
+                    "audio": [
+                        {
+                            "path": str(abs_clip),
+                            "filename": filename,
+                            "fields": ["Back"],
+                        }
+                    ],
+                }
+                _invoke("updateNote", self.url, note=note_payload)
+                with db() as conn:
+                    conn.execute(
+                        "UPDATE cards SET status = 'audio_updated' WHERE id = ?",
+                        (row["card_id"],),
+                    )
+                updated += 1
+            except ConnectionError as exc:
+                print(f"  [error] {exc}")
+                return ctx
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [warn] note {row['anki_note_id']} failed: {exc}")
+                failed += 1
+
+        msg = f"  Updated {updated} note(s) with audio"
+        if failed:
+            msg += f" ({failed} failed)"
+        print(msg)
+        return ctx
+
+
+# Auxiliary pipeline for adding audio to already-exported cards.
+AUDIO_UPDATE_PIPELINE: list[type[PipelineStage]] = [AudioClipStage, CardUpdateStage]
