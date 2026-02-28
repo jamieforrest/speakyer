@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from collections import Counter
 
 import requests
@@ -9,6 +11,39 @@ from speakyer.nlp.base import NLPExtractor, Word
 from speakyer.pipeline.base import PipelineContext, PipelineStage
 from speakyer.storage import LocalStorage
 from speakyer.transcription.base import Transcript, Transcriber
+
+
+def _transcribe_with_heartbeat(
+    transcriber: Transcriber,
+    audio_path,
+    *,
+    language: str | None = None,
+    interval: int = 15,
+) -> "Transcript":
+    """Call transcriber.transcribe() on a background thread, printing elapsed-time
+    heartbeats every *interval* seconds so the terminal doesn't look frozen."""
+    result: list = []
+    error: list = []
+
+    def _run():
+        try:
+            result.append(transcriber.transcribe(audio_path, language=language))
+        except Exception as exc:  # noqa: BLE001
+            error.append(exc)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    elapsed = 0
+    while t.is_alive():
+        t.join(timeout=interval)
+        elapsed += interval
+        if t.is_alive():
+            mins, secs = divmod(elapsed, 60)
+            print(f"  ... still transcribing ({mins}:{secs:02d} elapsed)")
+
+    if error:
+        raise error[0]
+    return result[0]
 
 
 class DownloadStage(PipelineStage):
@@ -91,8 +126,8 @@ class TranscribeStage(PipelineStage):
             return ctx
 
         print(f"  Transcribing: {ep.title!r} ...")
-        transcript = self.transcriber.transcribe(
-            audio_path, language=ctx.source_config.language
+        transcript = _transcribe_with_heartbeat(
+            self.transcriber, audio_path, language=ctx.source_config.language
         )
 
         # Persist raw JSON (needed for audio clip extraction in v1.1).
