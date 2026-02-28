@@ -8,6 +8,11 @@ sources:
     language: de
     active: true
 
+  - name: der-tag
+    rss_url: https://www.deutschlandfunk.de/podcast-104.xml
+    language: de
+    active: true
+
   # Uncomment when ready to add:
   # - name: deutschlandfunk-nachrichten
   #   rss_url: https://www.deutschlandfunk.de/podcast-nachrichten.3184.de.podcast.xml
