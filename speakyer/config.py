@@ -28,6 +28,7 @@ class Config:
     data_dir: Path
     sources_yaml: Path
     whisper_model: str
+    spacy_model: str
     anki_connect_url: str
 
     @classmethod
@@ -42,6 +43,7 @@ class Config:
             whisper_model=os.getenv(
                 "SPEAKYER_WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx"
             ),
+            spacy_model=os.getenv("SPEAKYER_SPACY_MODEL", "de_core_news_lg"),
             anki_connect_url=os.getenv(
                 "SPEAKYER_ANKI_CONNECT_URL", "http://localhost:8765"
             ),

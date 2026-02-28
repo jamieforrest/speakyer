@@ -7,8 +7,8 @@ and pushes flashcards to Anki.
 **Language support:** Starting with German. Additional languages are planned —
 the pipeline is designed to be language-agnostic from the ground up.
 
-**Current status:** Milestone 2 — transcription complete.
-NLP and card generation are coming in subsequent milestones.
+**Current status:** Milestone 3 — NLP + CEFR vocabulary tagging complete.
+Card generation and Anki export are coming in subsequent milestones.
 See the [milestone plan](#milestones) below.
 
 ---
@@ -102,8 +102,14 @@ python scripts/run_pipeline.py --source tagesschau    # one source only
 python scripts/run_pipeline.py --dry-run              # preview without writing
 python scripts/run_pipeline.py --stage download       # download only
 python scripts/run_pipeline.py --stage transcribe     # download + transcribe
+python scripts/run_pipeline.py --stage nlp            # download + transcribe + NLP
 python scripts/list_episodes.py                       # check what was fetched
 python scripts/show_transcript.py <episode_id>        # view transcript
+python scripts/show_words.py <episode_id>             # vocabulary grouped by CEFR level
+python scripts/show_words.py <episode_id> --level B1  # filter to a single CEFR level
+python scripts/show_words.py <episode_id> --unique    # deduplicated lemmas only
+python scripts/seed_cefr.py                           # seed CEFR table from data/cefr/de.csv
+python scripts/seed_cefr.py path/to/custom.csv       # seed from a custom word list
 ```
 
 ---
@@ -166,7 +172,7 @@ These scripts evolve alongside the milestones as new data is available.
 | `python scripts/db_inspect.py` | Table counts and recent rows |
 | `python scripts/list_episodes.py` | Fetched episodes with status *(Milestone 1)* |
 | `python scripts/show_transcript.py <id>` | Transcript with timestamps *(Milestone 2)* |
-| `python scripts/show_words.py <id>` | Vocabulary grouped by CEFR level *(Milestone 3)* |
+| `python scripts/show_words.py <id>` | Vocabulary grouped by CEFR level |
 | `python scripts/show_cards.py <id>` | Card preview before Anki export *(Milestone 4)* |
 
 ### Environment variable overrides
@@ -177,6 +183,7 @@ These scripts evolve alongside the milestones as new data is available.
 | `SPEAKYER_DATA_DIR` | `./data` | Root for audio, transcripts, clips |
 | `SPEAKYER_SOURCES_YAML` | `./sources.yaml` | Podcast source definitions |
 | `SPEAKYER_WHISPER_MODEL` | `mlx-community/whisper-large-v3-mlx` | Whisper model identifier |
+| `SPEAKYER_SPACY_MODEL` | `de_core_news_lg` | spaCy model for NLP/lemmatisation |
 | `SPEAKYER_ANKI_CONNECT_URL` | `http://localhost:8765` | AnkiConnect endpoint |
 
 ---
@@ -188,7 +195,7 @@ These scripts evolve alongside the milestones as new data is available.
 | 0 | Project foundation: schema, config, storage abstraction | ✅ Done |
 | 1 | Source configuration & audio download | ✅ Done |
 | 2 | Whisper transcription (local, Apple Silicon) | ✅ Done |
-| 3 | NLP pipeline + CEFR vocabulary tagging | Pending |
+| 3 | NLP pipeline + CEFR vocabulary tagging | ✅ Done |
 | 4 | Anki card generation | Pending |
 | 5 | Pipeline runner + AnkiConnect export | Pending |
 | 6 | Hardening, idempotency, v1 complete | Pending |

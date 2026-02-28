@@ -1,9 +1,11 @@
 import json
+from collections import Counter
 
 import requests
 
 from speakyer.config import config
 from speakyer.database import db
+from speakyer.nlp.base import NLPExtractor, Word
 from speakyer.pipeline.base import PipelineContext, PipelineStage
 from speakyer.storage import LocalStorage
 from speakyer.transcription.base import Transcript, Transcriber
@@ -129,5 +131,117 @@ class TranscribeStage(PipelineStage):
         print(
             f"  Transcribed {len(transcript.segments)} segments "
             f"({mins}:{secs:02d}) — lang: {transcript.language}"
+        )
+        return ctx
+
+
+class NLPStage(PipelineStage):
+    """Extract vocabulary from transcript segments and look up CEFR levels.
+
+    Words are stored in the ``words`` table, one row per token per segment.
+    Episode status advances to ``"analyzed"`` after completion.
+
+    An injectable *extractor* enables testing without a real spaCy model.
+    """
+
+    def __init__(self, extractor: NLPExtractor | None = None) -> None:
+        self._extractor = extractor
+
+    @property
+    def extractor(self) -> NLPExtractor:
+        if self._extractor is None:
+            from speakyer.nlp.spacy_nlp import SpacyExtractor
+
+            self._extractor = SpacyExtractor(config.spacy_model)
+        return self._extractor
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        ep = ctx.episode
+
+        # Idempotency: skip if words already exist in DB for this episode.
+        with db() as conn:
+            existing_count = conn.execute(
+                "SELECT COUNT(*) FROM words WHERE episode_id = ?", (ep.id,)
+            ).fetchone()[0]
+        if existing_count:
+            print(f"  [skip] {ep.title!r}: already analyzed ({existing_count} words)")
+            return ctx
+
+        # Load transcript segments from DB.
+        with db() as conn:
+            segments = conn.execute(
+                """
+                SELECT ts.id, ts.text, ts.start_time
+                FROM transcript_segments ts
+                JOIN transcripts t ON ts.transcript_id = t.id
+                WHERE t.episode_id = ?
+                ORDER BY ts.segment_index
+                """,
+                (ep.id,),
+            ).fetchall()
+
+        if not segments:
+            print(f"  [skip] {ep.title!r}: no transcript found — run transcribe stage first")
+            return ctx
+
+        if ctx.dry_run:
+            print(f"  [dry-run] would analyze: {ep.title!r} ({len(segments)} segments)")
+            return ctx
+
+        # Pre-load CEFR lookup table into memory (one query for all words).
+        with db() as conn:
+            cefr_rows = conn.execute("SELECT lemma, level FROM cefr_words").fetchall()
+        cefr_lookup: dict[str, str] = {row["lemma"]: row["level"] for row in cefr_rows}
+
+        # Extract words from each segment.
+        all_words: list[Word] = []
+        for seg in segments:
+            words = self.extractor.extract(
+                text=seg["text"],
+                episode_id=ep.id,
+                segment_id=seg["id"],
+                start_time=seg["start_time"],
+                cefr_lookup=cefr_lookup,
+            )
+            all_words.extend(words)
+
+        # Persist to DB.
+        with db() as conn:
+            conn.executemany(
+                """
+                INSERT INTO words
+                    (episode_id, transcript_segment_id, surface_form, lemma,
+                     pos, cefr_level, example_sentence, start_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        w.episode_id,
+                        w.transcript_segment_id,
+                        w.surface_form,
+                        w.lemma,
+                        w.pos,
+                        w.cefr_level,
+                        w.example_sentence,
+                        w.start_time,
+                    )
+                    for w in all_words
+                ],
+            )
+            conn.execute(
+                "UPDATE episodes SET status = ? WHERE id = ?",
+                ("analyzed", ep.id),
+            )
+
+        ctx.words = all_words
+
+        cefr_counts = Counter(w.cefr_level for w in all_words if w.cefr_level)
+        tagged = sum(cefr_counts.values())
+        levels_str = " ".join(f"{lvl}:{n}" for lvl, n in sorted(cefr_counts.items()))
+        print(
+            f"  Extracted {len(all_words)} words "
+            f"({tagged} with CEFR level"
+            + (f": {levels_str}" if levels_str else "")
+            + ")"
         )
         return ctx

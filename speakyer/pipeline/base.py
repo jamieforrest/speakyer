@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from speakyer.sources.base import Episode, SourceConfig
 
 if TYPE_CHECKING:
+    from speakyer.nlp.base import Word
     from speakyer.transcription.base import Transcript
 
 
@@ -18,7 +19,7 @@ class PipelineContext:
     dry_run: bool = False
     audio_path: Path | None = None
     transcript: Transcript | None = None  # set by TranscribeStage
-    # words: list[Word] = field(...)       # Milestone 3
+    words: list[Word] = field(default_factory=list)  # set by NLPStage
     # cards: list[Card] = field(...)       # Milestone 4
 
 
