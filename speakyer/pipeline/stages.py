@@ -562,10 +562,11 @@ class AudioClipStage(PipelineStage):
 
 
 class CardUpdateStage(PipelineStage):
-    """Push audio clips to existing Anki notes via AnkiConnect updateNote.
+    """Push audio clips and sync fields/tags to existing Anki notes.
 
     Processes exported cards for the episode that have a clip path but have
-    not yet been updated in Anki (``status = 'exported'``).  After a
+    not yet been updated in Anki (``status = 'exported'``).  Re-syncs the
+    Front/Back fields and tags as well as attaching the audio.  After a
     successful update, the card status advances to ``'audio_updated'``.
 
     An injectable *url* enables testing without a running Anki instance.
@@ -624,6 +625,7 @@ class CardUpdateStage(PipelineStage):
                         "Front": AnkiConnectExporter._build_front(row),
                         "Back": AnkiConnectExporter._build_back(row),
                     },
+                    "tags": AnkiConnectExporter._build_tags(row),
                     "audio": [
                         {
                             "path": str(abs_clip),

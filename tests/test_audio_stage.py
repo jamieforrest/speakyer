@@ -299,6 +299,8 @@ class TestCardUpdateStage:
         assert note["id"] == 99
         assert "audio" in note
         assert note["audio"][0]["filename"] == "speakyer_99.mp3"
+        assert "tags" in note
+        assert "speakyer" in note["tags"]
 
         conn = sqlite3.connect(str(tmp_db))
         status = conn.execute("SELECT status FROM cards").fetchone()[0]
