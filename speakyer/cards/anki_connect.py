@@ -168,4 +168,7 @@ class AnkiConnectExporter(CardExporter):
             tags.append(f"cefr::{row['cefr_level']}")
         source = row["source_name"].replace(" ", "_").lower()
         tags.append(f"podcast::{source}")
+        if row["published_at"]:
+            date = str(row["published_at"])[:10]  # keep YYYY-MM-DD only
+            tags.append(f"date::{date}")
         return tags

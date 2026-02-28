@@ -155,6 +155,16 @@ class TestAnkiConnectExporterNoteBuilding:
         tags = AnkiConnectExporter._build_tags(row)
         assert not any(t.startswith("cefr::") for t in tags)
 
+    def test_tags_include_date(self):
+        row = self._make_row(published_at="2026-02-28T10:00:00")
+        tags = AnkiConnectExporter._build_tags(row)
+        assert "date::2026-02-28" in tags
+
+    def test_tags_no_date_tag_when_none(self):
+        row = self._make_row(published_at=None)
+        tags = AnkiConnectExporter._build_tags(row)
+        assert not any(t.startswith("date::") for t in tags)
+
     def test_note_structure(self):
         row = self._make_row()
         exp = AnkiConnectExporter()
