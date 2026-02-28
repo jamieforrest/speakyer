@@ -1,0 +1,3 @@
+-r requirements.in
+pytest>=8.0
+pip-tools>=7.0

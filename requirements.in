@@ -1,0 +1,3 @@
+# Install the package itself in editable mode.
+# pip-compile resolves all transitive dependencies from pyproject.toml.
+-e .
