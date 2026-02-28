@@ -67,6 +67,7 @@ def insert_episodes(episodes: list[Episode]) -> list[Episode]:
     """Persist new episodes, skipping any whose GUID already exists.
 
     Returns only the newly inserted episodes, with their DB id populated.
+    The datetime adapter registered in database.py handles published_at formatting.
     """
     inserted = []
     with db() as conn:
@@ -81,7 +82,7 @@ def insert_episodes(episodes: list[Episode]) -> list[Episode]:
                     ep.source_id,
                     ep.guid,
                     ep.title,
-                    ep.published_at.isoformat() if ep.published_at else None,
+                    ep.published_at,  # passed as datetime; adapter formats it
                     ep.audio_url,
                     ep.status,
                 ),

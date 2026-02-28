@@ -73,11 +73,18 @@ def main() -> None:
             print("  No new episodes.")
             continue
 
-        inserted = insert_episodes(new_episodes)
-        total_new += len(inserted)
-        print(f"  {len(inserted)} new episode(s).")
+        if args.dry_run:
+            # In dry-run mode, never touch the DB — report against the RSS results directly.
+            total_new += len(new_episodes)
+            episodes_to_process = new_episodes
+        else:
+            inserted = insert_episodes(new_episodes)
+            total_new += len(inserted)
+            episodes_to_process = inserted
 
-        for ep in inserted:
+        print(f"  {len(episodes_to_process)} new episode(s).")
+
+        for ep in episodes_to_process:
             ctx = PipelineContext(source_config=source, episode=ep, dry_run=args.dry_run)
             for stage in stages:
                 ctx = stage.run(ctx)

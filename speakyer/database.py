@@ -1,9 +1,20 @@
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Generator
 
 from speakyer.config import config
+
+# Register a custom datetime adapter/converter so that:
+# 1. datetime objects are stored as "YYYY-MM-DD HH:MM:SS" (space separator),
+#    which is what SQLite expects for TIMESTAMP columns.
+# 2. We avoid the Python 3.12 deprecation warning about the default converter.
+sqlite3.register_adapter(datetime, lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S"))
+sqlite3.register_converter(
+    "TIMESTAMP",
+    lambda b: datetime.fromisoformat(b.decode().replace(" ", "T")),
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
