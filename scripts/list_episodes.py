@@ -13,7 +13,8 @@ STATUS_SYMBOLS = {
     "fetched": "○",
     "downloaded": "●",
     "transcribed": "◉",
-    "processed": "◆",
+    "analyzed": "◆",
+    "cards_pending": "🃏",
     "exported": "✓",
 }
 
@@ -48,7 +49,7 @@ def main() -> None:
         print(f"{row['id']:<5}  {symbol}   {row['source']:<20}  {published:<12}  {title}")
 
     print()
-    print("Status: ○ fetched  ● downloaded  ◉ transcribed  ◆ processed  ✓ exported")
+    print("Status: ○ fetched  ● downloaded  ◉ transcribed  ◆ analyzed  🃏 cards_pending  ✓ exported")
     print()
 
 
