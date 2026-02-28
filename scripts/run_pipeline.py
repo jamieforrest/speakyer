@@ -9,6 +9,17 @@ Usage:
     python scripts/run_pipeline.py --stage download      # up to download stage
     python scripts/run_pipeline.py --stage transcribe    # up to transcribe stage
     python scripts/run_pipeline.py --stage nlp           # up to NLP/CEFR tagging
+
+    # Override the Whisper model for this run (faster models for development):
+    python scripts/run_pipeline.py --whisper-model mlx-community/whisper-small-mlx
+    python scripts/run_pipeline.py --whisper-model mlx-community/whisper-medium-mlx
+
+    Available mlx-whisper models (fastest → most accurate):
+      mlx-community/whisper-tiny-mlx        ~32x realtime  (rough accuracy)
+      mlx-community/whisper-base-mlx        ~16x realtime
+      mlx-community/whisper-small-mlx       ~6x  realtime  (good for dev)
+      mlx-community/whisper-medium-mlx      ~2x  realtime  (good balance)
+      mlx-community/whisper-large-v3-mlx    ~1x  realtime  (default, best)
 """
 
 import argparse
@@ -17,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import speakyer.config as _cfg_module
 from speakyer.database import init
 from speakyer.pipeline.base import PipelineContext
 from speakyer.pipeline.stages import DownloadStage, NLPStage, TranscribeStage
@@ -59,7 +71,16 @@ def main() -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="Preview without writing anything"
     )
+    parser.add_argument(
+        "--whisper-model",
+        metavar="MODEL",
+        help="Override the Whisper model for this run (e.g. mlx-community/whisper-small-mlx)",
+    )
     args = parser.parse_args()
+
+    if args.whisper_model:
+        _cfg_module.config.whisper_model = args.whisper_model
+        print(f"Using Whisper model: {args.whisper_model}")
 
     init()
 
