@@ -5,6 +5,23 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent
 
 
+def _load_dotenv(path: Path = BASE_DIR / ".env") -> None:
+    """Load KEY=value pairs from a .env file into os.environ (if not already set)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")  # handle simple quoting
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
+
 @dataclass
 class Config:
     db_path: Path
