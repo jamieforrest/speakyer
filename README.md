@@ -1,11 +1,14 @@
 # Speakyer
 
-Podcast vocabulary learning pipeline for German learners. Speakyer downloads
-podcast episodes, transcribes them with Whisper, extracts vocabulary tagged by
-CEFR level (A1–C2), and pushes flashcards to Anki.
+Podcast language learning pipeline. Speakyer downloads podcast episodes,
+transcribes them with Whisper, extracts vocabulary tagged by CEFR level (A1–C2),
+and pushes flashcards to Anki.
 
-**Current status:** Milestone 1 — source configuration and audio download.
-Transcription and card generation are coming in subsequent milestones.
+**Language support:** Starting with German. Additional languages are planned —
+the pipeline is designed to be language-agnostic from the ground up.
+
+**Current status:** Milestone 2 — transcription complete.
+NLP and card generation are coming in subsequent milestones.
 See the [milestone plan](#milestones) below.
 
 ---
@@ -14,7 +17,7 @@ See the [milestone plan](#milestones) below.
 
 1. Speakyer reads your `sources.yaml` to find podcast RSS feeds
 2. New episodes are downloaded and transcribed locally using Whisper (fast on Apple Silicon)
-3. German vocabulary is extracted, lemmatized, and tagged with CEFR level using spaCy
+3. Vocabulary is extracted, lemmatized, and tagged with CEFR level using spaCy
 4. Flashcards with context sentences are pushed to Anki via AnkiConnect
 5. Cards are tagged by level (`cefr::B2`), podcast, and date — study what you want in Anki
 
@@ -42,7 +45,9 @@ pip-sync requirements.txt
 pip install -e .
 ```
 
-### 2. Download the German spaCy model
+### 2. Download the spaCy language model
+
+For German (default):
 
 ```bash
 python -m spacy download de_core_news_lg
@@ -76,8 +81,10 @@ This creates `speakyer.db` and shows the empty schema.
 python scripts/run_pipeline.py                         # all active sources
 python scripts/run_pipeline.py --source tagesschau    # one source only
 python scripts/run_pipeline.py --dry-run              # preview without writing
-python scripts/run_pipeline.py --stage download       # up to download stage only
+python scripts/run_pipeline.py --stage download       # download only
+python scripts/run_pipeline.py --stage transcribe     # download + transcribe
 python scripts/list_episodes.py                       # check what was fetched
+python scripts/show_transcript.py <episode_id>        # view transcript
 ```
 
 ---
@@ -99,9 +106,9 @@ sources:
     active: false
 ```
 
-On first run, Speakyer seeds the `sources` table from this file. To add a new
-podcast later, add an entry to `sources.yaml` and run `speakyer run` — it will
-be picked up automatically.
+The `language` field is passed to Whisper and the NLP pipeline. On first run,
+Speakyer seeds the `sources` table from this file. To add a new podcast, add an
+entry and run the pipeline — it will be picked up automatically.
 
 ---
 
@@ -117,6 +124,12 @@ pip-sync requirements.txt             # sync your environment
 
 # Install dev tools:
 pip-sync requirements-dev.txt
+```
+
+### Running tests
+
+```bash
+python -m pytest
 ```
 
 ### Inspection scripts
@@ -149,8 +162,8 @@ These scripts evolve alongside the milestones as new data is available.
 |---|---|---|
 | 0 | Project foundation: schema, config, storage abstraction | ✅ Done |
 | 1 | Source configuration & audio download | ✅ Done |
-| 2 | Whisper transcription (local, Apple Silicon) | Pending |
-| 3 | German NLP pipeline + CEFR vocabulary tagging | Pending |
+| 2 | Whisper transcription (local, Apple Silicon) | ✅ Done |
+| 3 | NLP pipeline + CEFR vocabulary tagging | Pending |
 | 4 | Anki card generation | Pending |
 | 5 | Pipeline runner + AnkiConnect export | Pending |
 | 6 | Hardening, idempotency, v1 complete | Pending |

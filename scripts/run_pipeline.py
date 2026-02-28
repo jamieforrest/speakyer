@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from speakyer.database import init
 from speakyer.pipeline.base import PipelineContext
-from speakyer.pipeline.stages import DownloadStage
+from speakyer.pipeline.stages import DownloadStage, TranscribeStage
 from speakyer.sources.loader import get_known_guids, insert_episodes, sync_sources
 from speakyer.sources.rss import RSSPodcastSource
 
 # Ordered list of available stages. Extended each milestone.
 STAGES = {
     "download": DownloadStage,
-    # "transcribe": TranscribeStage,  # Milestone 2
+    "transcribe": TranscribeStage,
     # "nlp": NLPStage,                # Milestone 3
     # "cards": CardGenStage,          # Milestone 4
     # "export": ExportStage,          # Milestone 5
