@@ -154,7 +154,7 @@ class AnkiConnectExporter(CardExporter):
                 {
                     "path": str(clip_path),
                     "filename": f"speakyer_{row['word_id']}.mp3",
-                    "fields": ["Back"],
+                    "fields": ["Front"],
                 }
             ]
         return note

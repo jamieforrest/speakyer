@@ -636,7 +636,7 @@ class CardUpdateStage(PipelineStage):
                         {
                             "path": str(abs_clip),
                             "filename": filename,
-                            "fields": ["Back"],
+                            "fields": ["Front"],
                         }
                     ],
                 }

@@ -356,4 +356,4 @@ class TestBuildNoteAudioAttachment:
         assert "audio" in note
         assert note["audio"][0]["path"] == "/data/clips/7.mp3"
         assert note["audio"][0]["filename"] == "speakyer_7.mp3"
-        assert note["audio"][0]["fields"] == ["Back"]
+        assert note["audio"][0]["fields"] == ["Front"]
