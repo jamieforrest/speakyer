@@ -536,20 +536,23 @@ class AudioClipStage(PipelineStage):
             print(f"  [dry-run] would extract {len(rows)} audio clip(s) for: {ep.title!r}")
             return ctx
 
-        print(f"  Extracting {len(rows)} audio clip(s) for: {ep.title!r} ...")
+        total = len(rows)
+        print(f"  Extracting {total} audio clip(s) for: {ep.title!r} ...")
         extracted = skipped = 0
-        for row in rows:
+        for i, row in enumerate(rows, 1):
             clip_path = self.clipper.extract(row["word_id"])
             if clip_path is None:
                 skipped += 1
-                continue
-            rel = str(clip_path.relative_to(self.clipper.storage.base_dir))
-            with db() as conn:
-                conn.execute(
-                    "UPDATE cards SET audio_clip_path = ? WHERE id = ?",
-                    (rel, row["card_id"]),
-                )
-            extracted += 1
+            else:
+                rel = str(clip_path.relative_to(self.clipper.storage.base_dir))
+                with db() as conn:
+                    conn.execute(
+                        "UPDATE cards SET audio_clip_path = ? WHERE id = ?",
+                        (rel, row["card_id"]),
+                    )
+                extracted += 1
+            if i % 50 == 0 or i == total:
+                print(f"    ... {i}/{total} ({skipped} skipped)", flush=True)
 
         msg = f"  Extracted {extracted} audio clip(s)"
         if skipped:

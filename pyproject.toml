@@ -17,11 +17,8 @@ dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
     "click>=8.1",
+    "pydub>=0.25",
 ]
-
-[project.optional-dependencies]
-# Audio clip extraction — required for v1.1
-audio = ["pydub>=0.25"]
 
 [project.scripts]
 speakyer = "speakyer.cli:main"

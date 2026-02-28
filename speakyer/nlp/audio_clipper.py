@@ -47,6 +47,10 @@ class AudioClipper:
         self._storage = storage
         self.clips_dir = clips_dir
         self.padding_ms = padding_ms
+        # Per-instance caches so repeated calls for the same episode only load
+        # the audio file and transcript JSON once each.
+        self._audio_cache: dict[str, object] = {}   # path → AudioSegment
+        self._transcript_cache: dict[str, Transcript] = {}
 
     @property
     def storage(self) -> LocalStorage:
@@ -81,7 +85,15 @@ class AudioClipper:
         if self.storage.exists(rel_clip):
             return self.storage.absolute_path(rel_clip)
 
-        transcript = Transcript.from_dict(json.loads(json_path.read_bytes()))
+        # Cache transcript and audio per path so repeated calls for the same
+        # episode only load each file once.
+        json_key = str(json_path)
+        if json_key not in self._transcript_cache:
+            self._transcript_cache[json_key] = Transcript.from_dict(
+                json.loads(json_path.read_bytes())
+            )
+        transcript = self._transcript_cache[json_key]
+
         start_ms, end_ms = self._boundaries(
             transcript,
             seg_start=row["seg_start"],
@@ -175,7 +187,10 @@ class AudioClipper:
                 "ffmpeg must also be installed and on your PATH (brew install ffmpeg)."
             ) from exc
 
-        audio = AudioSegment.from_file(str(audio_path))
+        audio_key = str(audio_path)
+        if audio_key not in self._audio_cache:
+            self._audio_cache[audio_key] = AudioSegment.from_file(str(audio_path))
+        audio = self._audio_cache[audio_key]
         clip = audio[start_ms:end_ms]
         buf = clip.export(format="mp3")
 
