@@ -10,6 +10,7 @@ import pytest
 from speakyer.database import db
 from speakyer.nlp.audio_clipper import AudioClipper
 from speakyer.pipeline.base import PipelineContext
+from speakyer.cards.anki_connect import AnkiConnectExporter
 from speakyer.pipeline.stages import AudioClipStage, CardUpdateStage
 from speakyer.sources.base import Episode, SourceConfig
 from speakyer.storage import LocalStorage
@@ -286,16 +287,18 @@ class TestCardUpdateStage:
         ep_id = seed_db(tmp_db, card_status="exported", anki_note_id=99, audio_clip_path="clips/1.mp3")
 
         with patch("speakyer.pipeline.stages._invoke") as mock_invoke:
+            # modelNames returns the model so createModel is skipped.
+            mock_invoke.return_value = [AnkiConnectExporter.MODEL_NAME]
             with patch("speakyer.pipeline.stages.LocalStorage") as mock_storage_cls:
                 mock_storage = MagicMock()
                 mock_storage.absolute_path.return_value = Path("/data/clips/1.mp3")
                 mock_storage_cls.return_value = mock_storage
                 self._run(ep_id, tmp_db)
 
-        mock_invoke.assert_called_once()
-        action, url = mock_invoke.call_args[0]
-        assert action == "updateNote"
-        note = mock_invoke.call_args[1]["note"]
+        actions = [call[0][0] for call in mock_invoke.call_args_list]
+        assert "updateNote" in actions
+        update_call = next(c for c in mock_invoke.call_args_list if c[0][0] == "updateNote")
+        note = update_call[1]["note"]
         assert note["id"] == 99
         assert "audio" in note
         assert note["audio"][0]["filename"] == "speakyer_99.mp3"
@@ -310,7 +313,12 @@ class TestCardUpdateStage:
     def test_connection_error_aborts_gracefully(self, tmp_db, tmp_path, capsys):
         ep_id = seed_db(tmp_db, card_status="exported", anki_note_id=99, audio_clip_path="clips/1.mp3")
 
-        with patch("speakyer.pipeline.stages._invoke", side_effect=ConnectionError("Anki down")):
+        def _invoke_side_effect(action, *args, **kwargs):
+            if action == "modelNames":
+                return [AnkiConnectExporter.MODEL_NAME]
+            raise ConnectionError("Anki down")
+
+        with patch("speakyer.pipeline.stages._invoke", side_effect=_invoke_side_effect):
             with patch("speakyer.pipeline.stages.LocalStorage") as mock_storage_cls:
                 mock_storage = MagicMock()
                 mock_storage.absolute_path.return_value = Path("/data/clips/1.mp3")

@@ -615,6 +615,28 @@ class CardUpdateStage(PipelineStage):
             print(f"  [dry-run] would {action} {len(rows)} Anki note(s) for: {ep.title!r}")
             return ctx
 
+        if not getattr(self, "_model_ensured", False):
+            existing = _invoke("modelNames", self.url)
+            if AnkiConnectExporter.MODEL_NAME not in existing:
+                _invoke(
+                    "createModel",
+                    self.url,
+                    modelName=AnkiConnectExporter.MODEL_NAME,
+                    inOrderFields=["Front", "Back"],
+                    css=(
+                        ".card { font-family: Arial; font-size: 18px; text-align: left; }"
+                        " b { color: #2060a0; }"
+                    ),
+                    cardTemplates=[
+                        {
+                            "Name": "Recognition",
+                            "Front": "{{Front}}",
+                            "Back": "{{FrontSide}}<hr id=answer>{{Back}}",
+                        }
+                    ],
+                )
+            self._model_ensured = True
+
         storage = LocalStorage(config.data_dir)
         total = len(rows)
         action_label = "Resyncing tags for" if ctx.resync_tags else "Updating"
