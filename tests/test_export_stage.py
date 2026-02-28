@@ -170,7 +170,7 @@ class TestAnkiConnectExporterNoteBuilding:
         exp = AnkiConnectExporter()
         note = exp._build_note(row)
         assert note["deckName"] == "Speakyer"
-        assert note["modelName"] == "Basic"
+        assert note["modelName"] == AnkiConnectExporter.MODEL_NAME
         assert "Front" in note["fields"]
         assert "Back" in note["fields"]
         assert isinstance(note["tags"], list)
@@ -193,14 +193,15 @@ class TestAnkiConnectExporterHTTP:
 
             # Also mock createDeck call
             mock_post.return_value.json.side_effect = [
-                {"result": "Speakyer", "error": None},  # createDeck
-                {"result": [42], "error": None},         # addNotes
+                {"result": "Speakyer", "error": None},              # createDeck
+                {"result": ["Speakyer"], "error": None},             # modelNames (model exists)
+                {"result": [42], "error": None},                     # addNotes
             ]
 
             note_ids = exp.export_rows([row])
 
         assert note_ids == [42]
-        assert mock_post.call_count == 2  # createDeck + addNotes
+        assert mock_post.call_count == 3  # createDeck + modelNames + addNotes
 
     def test_connection_refused_raises_connection_error(self):
         import requests as _requests

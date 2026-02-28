@@ -71,6 +71,8 @@ class AnkiConnectExporter(CardExporter):
     BATCH_SIZE = 50  # notes per addNotes call
     BATCH_TIMEOUT = 30  # seconds per batch request
 
+    MODEL_NAME = "Speakyer"
+
     def export_rows(self, rows: list) -> list[int]:
         """Push a batch of enriched card rows to Anki.
 
@@ -83,6 +85,7 @@ class AnkiConnectExporter(CardExporter):
         Sends notes in batches of :attr:`BATCH_SIZE` to avoid HTTP timeouts.
         """
         self._ensure_deck(rows[0]["deck_name"] if rows else "Speakyer")
+        self._ensure_model()
 
         notes = [self._build_note(row) for row in rows]
         all_ids: list[int] = []
@@ -105,13 +108,40 @@ class AnkiConnectExporter(CardExporter):
     def _ensure_deck(self, deck_name: str) -> None:
         _invoke("createDeck", self.url, deck=deck_name)
 
+    def _ensure_model(self) -> None:
+        """Create the Speakyer note type if it doesn't already exist.
+
+        Uses a single Front→Back card template so Anki never generates a
+        reversed card for the same note.
+        """
+        existing: list = _invoke("modelNames", self.url)  # type: ignore[assignment]
+        if self.MODEL_NAME in existing:
+            return
+        _invoke(
+            "createModel",
+            self.url,
+            modelName=self.MODEL_NAME,
+            inOrderFields=["Front", "Back"],
+            css=(
+                ".card { font-family: Arial; font-size: 18px; text-align: left; }"
+                " b { color: #2060a0; }"
+            ),
+            cardTemplates=[
+                {
+                    "Name": "Recognition",
+                    "Front": "{{Front}}",
+                    "Back": "{{FrontSide}}<hr id=answer>{{Back}}",
+                }
+            ],
+        )
+
     def _build_note(self, row) -> dict:
         front = self._build_front(row)
         back = self._build_back(row)
         tags = self._build_tags(row)
         note: dict = {
             "deckName": row["deck_name"],
-            "modelName": "Basic",
+            "modelName": self.MODEL_NAME,
             "fields": {"Front": front, "Back": back},
             "tags": tags,
             "options": {"allowDuplicate": True},
