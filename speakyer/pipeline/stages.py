@@ -5,6 +5,7 @@ from collections import Counter
 
 import requests
 
+from speakyer.cards.base import Card
 from speakyer.config import config
 from speakyer.database import db
 from speakyer.nlp.base import NLPExtractor, Word
@@ -278,5 +279,94 @@ class NLPStage(PipelineStage):
             f"({tagged} with CEFR level"
             + (f": {levels_str}" if levels_str else "")
             + ")"
+        )
+        return ctx
+
+
+class CardGenStage(PipelineStage):
+    """Create one Anki card per unique lemma not yet queued for export.
+
+    Deduplication is global: if a lemma already has a card from any episode it
+    is skipped.  The chosen word row (earliest occurrence in this episode) acts
+    as the canonical example sentence for the card.
+
+    Card content (front/back HTML, tags) is derived at export time (Milestone 5);
+    this stage only decides *which* words become cards and writes the queue rows.
+    """
+
+    DECK = "Speakyer"
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        ep = ctx.episode
+
+        # Idempotency: skip if cards already exist for this episode's words.
+        with db() as conn:
+            existing_count = conn.execute(
+                """
+                SELECT COUNT(*) FROM cards c
+                JOIN words w ON c.word_id = w.id
+                WHERE w.episode_id = ?
+                """,
+                (ep.id,),
+            ).fetchone()[0]
+        if existing_count:
+            print(f"  [skip] {ep.title!r}: cards already generated ({existing_count} cards)")
+            return ctx
+
+        # Load words for this episode (one row per token; ordered by appearance).
+        with db() as conn:
+            word_rows = conn.execute(
+                """
+                SELECT id, lemma FROM words
+                WHERE episode_id = ?
+                ORDER BY id
+                """,
+                (ep.id,),
+            ).fetchall()
+
+        if not word_rows:
+            print(f"  [skip] {ep.title!r}: no words found — run NLP stage first")
+            return ctx
+
+        if ctx.dry_run:
+            print(f"  [dry-run] would generate cards for: {ep.title!r} ({len(word_rows)} words)")
+            return ctx
+
+        # Fetch lemmas that already have cards anywhere in the DB.
+        with db() as conn:
+            existing_lemmas: set[str] = {
+                row["lemma"]
+                for row in conn.execute(
+                    "SELECT DISTINCT w.lemma FROM words w JOIN cards c ON c.word_id = w.id"
+                ).fetchall()
+            }
+
+        # Pick the first word_id for each new lemma (earliest segment occurrence).
+        new_cards: list[Card] = []
+        seen: set[str] = set()
+        for row in word_rows:
+            lemma = row["lemma"]
+            if lemma in existing_lemmas or lemma in seen:
+                continue
+            seen.add(lemma)
+            new_cards.append(Card(word_id=row["id"], deck_name=self.DECK))
+
+        with db() as conn:
+            cursors = conn.executemany(
+                "INSERT INTO cards (word_id, deck_name) VALUES (?, ?)",
+                [(c.word_id, c.deck_name) for c in new_cards],
+            )
+            conn.execute(
+                "UPDATE episodes SET status = ? WHERE id = ?",
+                ("cards_pending", ep.id),
+            )
+
+        ctx.cards = new_cards
+        skipped = len(word_rows) - len({r["lemma"] for r in word_rows}) + (
+            len({r["lemma"] for r in word_rows}) - len(new_cards)
+        )
+        print(
+            f"  Generated {len(new_cards)} new card(s) "
+            f"({skipped} duplicate/existing lemmas skipped)"
         )
         return ctx

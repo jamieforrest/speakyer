@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from speakyer.sources.base import Episode, SourceConfig
 
 if TYPE_CHECKING:
+    from speakyer.cards.base import Card
     from speakyer.nlp.base import Word
     from speakyer.transcription.base import Transcript
 
@@ -19,8 +20,9 @@ class PipelineContext:
     dry_run: bool = False
     audio_path: Path | None = None
     transcript: Transcript | None = None  # set by TranscribeStage
-    words: list[Word] = field(default_factory=list)  # set by NLPStage
-    # cards: list[Card] = field(...)       # Milestone 4
+    words: list[Word] = field(default_factory=list)    # set by NLPStage
+    cards: list[Card] = field(default_factory=list)    # set by CardGenStage
+    # anki_note_ids: list[int] = ...       # Milestone 5
 
 
 class PipelineStage(ABC):

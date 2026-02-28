@@ -7,8 +7,8 @@ and pushes flashcards to Anki.
 **Language support:** Starting with German. Additional languages are planned —
 the pipeline is designed to be language-agnostic from the ground up.
 
-**Current status:** Milestone 3 — NLP + CEFR vocabulary tagging complete.
-Card generation and Anki export are coming in subsequent milestones.
+**Current status:** Milestone 4 — card generation complete.
+AnkiConnect export is coming in the next milestone.
 See the [milestone plan](#milestones) below.
 
 ---
@@ -196,7 +196,7 @@ These scripts evolve alongside the milestones as new data is available.
 | 1 | Source configuration & audio download | ✅ Done |
 | 2 | Whisper transcription (local, Apple Silicon) | ✅ Done |
 | 3 | NLP pipeline + CEFR vocabulary tagging | ✅ Done |
-| 4 | Anki card generation | Pending |
+| 4 | Anki card generation | ✅ Done |
 | 5 | Pipeline runner + AnkiConnect export | Pending |
 | 6 | Hardening, idempotency, v1 complete | Pending |
 | 7 | Audio clips in flashcards (v1.1) | Pending |
