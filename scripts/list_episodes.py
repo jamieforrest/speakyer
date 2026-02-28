@@ -42,7 +42,8 @@ def main() -> None:
     print("─" * 80)
     for row in rows:
         symbol = STATUS_SYMBOLS.get(row["status"], "?")
-        published = (row["published_at"] or "")[:10]
+        dt = row["published_at"]
+        published = dt.strftime("%Y-%m-%d") if dt else ""
         title = (row["title"] or "")[:48]
         print(f"{row['id']:<5}  {symbol}   {row['source']:<20}  {published:<12}  {title}")
 
