@@ -29,6 +29,7 @@ from speakyer.transcription.base import Transcript
 
 _PADDING_MS = 500       # milliseconds added before/after the target segment
 _CLIPS_REL_DIR = "clips"
+_MIN_MS_PER_WORD = 250  # below this → likely a Whisper hallucination
 
 
 class AudioClipper:
@@ -80,6 +81,14 @@ class AudioClipper:
         if audio_path is None:
             return None
 
+        # Skip segments that are implausibly short for their text length —
+        # these are almost always Whisper hallucinations with bad timestamps.
+        word_count = len(row["seg_text"].split()) if row["seg_text"] else 1
+        min_duration_ms = word_count * _MIN_MS_PER_WORD
+        actual_duration_ms = (row["seg_end"] - row["seg_start"]) * 1000
+        if actual_duration_ms < min_duration_ms:
+            return None
+
         # Idempotent: return existing clip without re-extracting.
         rel_clip = f"{self.clips_dir}/{word_id}.mp3"
         if self.storage.exists(rel_clip):
@@ -113,6 +122,7 @@ class AudioClipper:
                 SELECT w.surface_form,
                        ts.start_time AS seg_start,
                        ts.end_time   AS seg_end,
+                       ts.text       AS seg_text,
                        t.raw_json_path,
                        e.audio_path
                 FROM words w

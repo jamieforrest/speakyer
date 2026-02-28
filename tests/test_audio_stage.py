@@ -197,6 +197,42 @@ class TestAudioClipperExtract:
             result = clipper.extract(1)
         assert result is None
 
+    def test_returns_none_for_implausibly_short_segment(self, tmp_db, tmp_path):
+        """Segments shorter than 250ms/word are likely Whisper hallucinations."""
+        with db(tmp_db) as conn:
+            conn.execute("INSERT OR IGNORE INTO sources (id, name, rss_url) VALUES (1, 'tagesschau', 'x')")
+            ep_id = conn.execute(
+                "INSERT INTO episodes (source_id, guid, title, audio_path, status) "
+                "VALUES (1, 'g2', 'Ep 2', 'audio/2.mp3', 'exported')"
+            ).lastrowid
+            tr_id = conn.execute(
+                "INSERT INTO transcripts (episode_id, raw_json_path, language_detected, duration_seconds) "
+                "VALUES (?, 'transcripts/2.json', 'de', 10.0)",
+                (ep_id,),
+            ).lastrowid
+            # 5-word segment squeezed into 0.88s → 176ms/word < 250ms/word threshold
+            seg_id = conn.execute(
+                "INSERT INTO transcript_segments (transcript_id, segment_index, text, start_time, end_time) "
+                "VALUES (?, 0, 'Ausbildung ist eine große Herausforderung.', 5.0, 5.88)",
+                (tr_id,),
+            ).lastrowid
+            w_id = conn.execute(
+                "INSERT INTO words (episode_id, transcript_segment_id, surface_form, lemma, pos, "
+                "cefr_level, example_sentence, start_time) VALUES (?, ?, 'Herausforderung', "
+                "'herausforderung', 'NOUN', 'B2', 'Ausbildung ist eine große Herausforderung.', 5.0)",
+                (ep_id, seg_id),
+            ).lastrowid
+
+        transcript = make_transcript(seg_start=5.0, seg_end=5.88)
+        storage = make_storage_with_assets(tmp_path / "short", transcript)
+        # rewrite transcript path to match the episode
+        storage.write("transcripts/2.json", json.dumps(transcript.to_dict()).encode())
+
+        clipper = AudioClipper(storage=storage)
+        with patch("speakyer.nlp.audio_clipper.db", lambda: db(tmp_db)):
+            result = clipper.extract(w_id)
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # AudioClipStage tests

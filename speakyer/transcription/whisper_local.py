@@ -53,6 +53,7 @@ class LocalWhisperTranscriber(Transcriber):
                 ],
             )
             for i, seg in enumerate(raw_segments)
+            if seg["text"].strip() and seg["start"] < seg["end"]
         ]
 
         return Transcript(
