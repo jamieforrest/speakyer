@@ -45,7 +45,21 @@ pip-sync requirements.txt
 pip install -e .
 ```
 
-### 2. Download the spaCy language model
+### 2. Set a HuggingFace token
+
+mlx-whisper downloads Whisper model weights from HuggingFace Hub on first use.
+A token is not strictly required but avoids rate limiting and speeds up downloads.
+
+1. Create a read-only token at https://huggingface.co/settings/tokens
+2. Add it to your shell profile (`~/.zshrc` or `~/.bash_profile`):
+
+```bash
+export HF_TOKEN=hf_...
+```
+
+Or add it to a `.env` file in the project root (already gitignored) and `source .env` before running.
+
+### 3. Download the spaCy language model
 
 For German (default):
 
@@ -53,7 +67,7 @@ For German (default):
 python -m spacy download de_core_news_lg
 ```
 
-### 3. Install AnkiConnect in Anki desktop
+### 5. Install AnkiConnect in Anki desktop
 
 1. Open Anki → Tools → Add-ons → Get Add-ons
 2. Enter code: `2055492159`
@@ -61,11 +75,11 @@ python -m spacy download de_core_news_lg
 
 Anki must be running whenever you run `speakyer run`.
 
-### 4. Configure podcast sources
+### 6. Configure podcast sources
 
 Edit `sources.yaml` to define your podcast feeds (see [Sources](#sources) below).
 
-### 5. Initialise the database
+### 7. Initialise the database
 
 ```bash
 python scripts/db_inspect.py
