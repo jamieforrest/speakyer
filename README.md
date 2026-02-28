@@ -57,7 +57,12 @@ A token is not strictly required but avoids rate limiting and speeds up download
 export HF_TOKEN=hf_...
 ```
 
-Or add it to a `.env` file in the project root (already gitignored) — Speakyer loads it automatically on startup.
+Or add it to a `.env` file in the project root — Speakyer loads it automatically on startup (`.env` is gitignored). Copy `.env.example` to get started:
+
+```bash
+cp .env.example .env
+# then edit .env and fill in your HF_TOKEN
+```
 
 ### 3. Download the spaCy language model
 
