@@ -164,7 +164,7 @@ class TestAnkiConnectExporterNoteBuilding:
         assert "Front" in note["fields"]
         assert "Back" in note["fields"]
         assert isinstance(note["tags"], list)
-        assert note["options"]["allowDuplicate"] is False
+        assert note["options"]["allowDuplicate"] is True
 
 
 class TestAnkiConnectExporterHTTP:

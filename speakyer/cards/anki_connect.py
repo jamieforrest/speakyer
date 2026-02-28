@@ -114,7 +114,7 @@ class AnkiConnectExporter(CardExporter):
             "modelName": "Basic",
             "fields": {"Front": front, "Back": back},
             "tags": tags,
-            "options": {"allowDuplicate": False, "duplicateScope": "deck"},
+            "options": {"allowDuplicate": True},
         }
 
     @staticmethod
