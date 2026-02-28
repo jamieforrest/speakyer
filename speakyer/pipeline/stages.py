@@ -6,8 +6,10 @@ from collections import Counter
 import requests
 
 from speakyer.cards.base import Card
+from speakyer.cards.anki_connect import AnkiConnectExporter
 from speakyer.config import config
 from speakyer.database import db
+from speakyer.exporters.base import CardExporter
 from speakyer.nlp.base import NLPExtractor, Word
 from speakyer.pipeline.base import PipelineContext, PipelineStage
 from speakyer.storage import LocalStorage
@@ -369,4 +371,112 @@ class CardGenStage(PipelineStage):
             f"  Generated {len(new_cards)} new card(s) "
             f"({skipped} duplicate/existing lemmas skipped)"
         )
+        return ctx
+
+
+class ExportStage(PipelineStage):
+    """Push pending cards to Anki via AnkiConnect and mark them exported.
+
+    An injectable *exporter* enables testing without a running Anki instance.
+    When *exporter* is ``None`` an :class:`AnkiConnectExporter` is created on
+    first use (connects to ``http://localhost:8765`` by default).
+    """
+
+    def __init__(self, exporter: CardExporter | None = None) -> None:
+        self._exporter = exporter
+
+    @property
+    def exporter(self) -> CardExporter:
+        if self._exporter is None:
+            self._exporter = AnkiConnectExporter()
+        return self._exporter
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        ep = ctx.episode
+
+        # Idempotency: skip if all cards for this episode are already exported.
+        with db() as conn:
+            pending_count = conn.execute(
+                """
+                SELECT COUNT(*) FROM cards c
+                JOIN words w ON c.word_id = w.id
+                WHERE w.episode_id = ? AND c.status = 'pending'
+                """,
+                (ep.id,),
+            ).fetchone()[0]
+
+        if not pending_count:
+            print(f"  [skip] {ep.title!r}: no pending cards to export")
+            return ctx
+
+        # Load enriched card rows (all data needed to build Anki notes).
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id AS card_id, c.word_id, c.deck_name,
+                       w.lemma, w.surface_form, w.pos, w.cefr_level,
+                       w.example_sentence,
+                       e.title AS episode_title, e.published_at,
+                       s.name AS source_name
+                FROM cards c
+                JOIN words w ON c.word_id = w.id
+                JOIN episodes e ON w.episode_id = e.id
+                JOIN sources s ON e.source_id = s.id
+                WHERE w.episode_id = ? AND c.status = 'pending'
+                ORDER BY c.id
+                """,
+                (ep.id,),
+            ).fetchall()
+
+        if ctx.dry_run:
+            print(f"  [dry-run] would export {len(rows)} card(s) for: {ep.title!r}")
+            return ctx
+
+        print(f"  Exporting {len(rows)} card(s) to Anki ...")
+        try:
+            note_ids = self.exporter.export_rows(rows)
+        except ConnectionError as exc:
+            print(f"  [error] {exc}")
+            return ctx
+
+        # Persist results: store note IDs, mark cards exported.
+        exported_card_ids = []
+        failed = 0
+        for row, note_id in zip(rows, note_ids):
+            if note_id:
+                exported_card_ids.append((note_id, row["card_id"]))
+            else:
+                failed += 1
+
+        with db() as conn:
+            conn.executemany(
+                """
+                UPDATE cards
+                SET anki_note_id = ?, status = 'exported',
+                    exported_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                exported_card_ids,
+            )
+            if failed:
+                # Mark rejected notes as failed so they don't block re-runs.
+                failed_ids = [
+                    (row["card_id"],)
+                    for row, nid in zip(rows, note_ids)
+                    if not nid
+                ]
+                conn.executemany(
+                    "UPDATE cards SET status = 'failed' WHERE id = ?",
+                    failed_ids,
+                )
+            conn.execute(
+                "UPDATE episodes SET status = 'exported' WHERE id = ?",
+                (ep.id,),
+            )
+
+        exported = len(exported_card_ids)
+        msg = f"  Exported {exported} card(s) to Anki"
+        if failed:
+            msg += f" ({failed} rejected — likely duplicates already in Anki)"
+        print(msg)
         return ctx

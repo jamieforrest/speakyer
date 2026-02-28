@@ -10,6 +10,7 @@ Usage:
     python scripts/run_pipeline.py --stage transcribe    # up to transcribe stage
     python scripts/run_pipeline.py --stage nlp           # up to NLP/CEFR tagging
     python scripts/run_pipeline.py --stage cards         # up to card generation
+    python scripts/run_pipeline.py --stage export        # up to Anki export (requires Anki running)
 
     # Override the Whisper model for this run (faster models for development):
     python scripts/run_pipeline.py --whisper-model mlx-community/whisper-small-mlx
@@ -32,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import speakyer.config as _cfg_module
 from speakyer.database import init
 from speakyer.pipeline.base import PipelineContext
-from speakyer.pipeline.stages import CardGenStage, DownloadStage, NLPStage, TranscribeStage
+from speakyer.pipeline.stages import CardGenStage, DownloadStage, ExportStage, NLPStage, TranscribeStage
 from speakyer.sources.loader import (
     get_episode_by_id,
     get_known_guids,
@@ -48,7 +49,7 @@ STAGES = {
     "transcribe": TranscribeStage,
     "nlp": NLPStage,
     "cards": CardGenStage,
-    # "export": ExportStage,          # Milestone 5
+    "export": ExportStage,
 }
 
 # Statuses that indicate an episode needs processing, per stage.
@@ -58,6 +59,7 @@ STAGE_PENDING_STATUSES = {
     "transcribe": {"fetched", "downloaded"},
     "nlp": {"fetched", "downloaded", "transcribed"},
     "cards": {"fetched", "downloaded", "transcribed", "analyzed"},
+    "export": {"fetched", "downloaded", "transcribed", "analyzed", "cards_pending"},
 }
 
 
