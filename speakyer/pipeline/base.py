@@ -18,6 +18,7 @@ class PipelineContext:
     source_config: SourceConfig
     episode: Episode
     dry_run: bool = False
+    resync_tags: bool = False
     audio_path: Path | None = None
     transcript: Transcript | None = None  # set by TranscribeStage
     words: list[Word] = field(default_factory=list)    # set by NLPStage

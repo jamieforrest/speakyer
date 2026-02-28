@@ -85,9 +85,12 @@ def _run_audio_update_pipeline(args) -> None:
     from speakyer.database import db
     from speakyer.sources.base import Episode, SourceConfig
 
+    resync_tags = getattr(args, "resync_tags", False)
+    status_filter = "('pending', 'exported', 'audio_updated')" if resync_tags else "('pending', 'exported')"
+
     with db() as conn:
         ep_rows = conn.execute(
-            """
+            f"""
             SELECT DISTINCT e.id, e.guid, e.title, e.audio_path, e.status,
                             e.source_id,
                             s.name AS source_name, s.rss_url,
@@ -96,7 +99,7 @@ def _run_audio_update_pipeline(args) -> None:
             JOIN words w ON w.episode_id = e.id
             JOIN cards c ON c.word_id = w.id
             JOIN sources s ON s.id = e.source_id
-            WHERE c.status IN ('pending', 'exported')
+            WHERE c.status IN {status_filter}
             ORDER BY e.id
             """
         ).fetchall()
@@ -131,7 +134,10 @@ def _run_audio_update_pipeline(args) -> None:
             active=bool(row["active"]),
         )
         print(f"\n[{source.name}] {ep.title!r}")
-        ctx = PipelineContext(source_config=source, episode=ep, dry_run=args.dry_run)
+        ctx = PipelineContext(
+            source_config=source, episode=ep,
+            dry_run=args.dry_run, resync_tags=resync_tags,
+        )
         for stage in stages:
             ctx = stage.run(ctx)
 
@@ -157,6 +163,11 @@ def main() -> None:
         "--pipeline",
         choices=["audio-update"],
         help="Run a named auxiliary pipeline instead of the main one",
+    )
+    parser.add_argument(
+        "--resync-tags",
+        action="store_true",
+        help="(audio-update) Re-push fields/tags to all exported cards, including already audio-updated ones",
     )
     args = parser.parse_args()
 

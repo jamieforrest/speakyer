@@ -581,14 +581,16 @@ class CardUpdateStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         ep = ctx.episode
+        status_filter = "('exported', 'audio_updated')" if ctx.resync_tags else "('exported')"
 
         with db() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT c.id AS card_id, c.anki_note_id, c.audio_clip_path,
+                       c.status AS card_status,
                        w.lemma, w.surface_form, w.pos, w.cefr_level,
                        w.example_sentence, c.deck_name,
-                       e.title AS episode_title,
+                       e.title AS episode_title, e.published_at,
                        s.name AS source_name
                 FROM cards c
                 JOIN words w ON c.word_id = w.id
@@ -597,23 +599,26 @@ class CardUpdateStage(PipelineStage):
                 WHERE w.episode_id = ?
                   AND c.anki_note_id IS NOT NULL
                   AND c.audio_clip_path IS NOT NULL
-                  AND c.status = 'exported'
+                  AND c.status IN {status_filter}
                 ORDER BY c.id
                 """,
                 (ep.id,),
             ).fetchall()
 
         if not rows:
-            print(f"  [skip] {ep.title!r}: no cards ready for audio update")
+            label = "tags resynced" if ctx.resync_tags else "audio update"
+            print(f"  [skip] {ep.title!r}: no cards ready for {label}")
             return ctx
 
         if ctx.dry_run:
-            print(f"  [dry-run] would update {len(rows)} Anki note(s) for: {ep.title!r}")
+            action = "resync tags for" if ctx.resync_tags else "update"
+            print(f"  [dry-run] would {action} {len(rows)} Anki note(s) for: {ep.title!r}")
             return ctx
 
         storage = LocalStorage(config.data_dir)
         total = len(rows)
-        print(f"  Updating {total} Anki note(s) with audio ...")
+        action_label = "Resyncing tags for" if ctx.resync_tags else "Updating"
+        print(f"  {action_label} {total} Anki note(s) ...")
         updated = failed = 0
 
         for row in rows:
@@ -636,11 +641,13 @@ class CardUpdateStage(PipelineStage):
                     ],
                 }
                 _invoke("updateNote", self.url, note=note_payload)
-                with db() as conn:
-                    conn.execute(
-                        "UPDATE cards SET status = 'audio_updated' WHERE id = ?",
-                        (row["card_id"],),
-                    )
+                # Only advance status for cards that weren't already audio_updated.
+                if row["card_status"] == "exported":
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE cards SET status = 'audio_updated' WHERE id = ?",
+                            (row["card_id"],),
+                        )
                 updated += 1
                 if updated % 50 == 0:
                     print(f"    ... {updated}/{total}")
@@ -651,7 +658,7 @@ class CardUpdateStage(PipelineStage):
                 print(f"  [warn] note {row['anki_note_id']} failed: {exc}")
                 failed += 1
 
-        msg = f"  Updated {updated} note(s) with audio"
+        msg = f"  {'Resynced tags for' if ctx.resync_tags else 'Updated'} {updated} note(s)"
         if failed:
             msg += f" ({failed} failed)"
         print(msg)
