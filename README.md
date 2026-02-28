@@ -129,6 +129,12 @@ pip-sync requirements-dev.txt
 ### Running tests
 
 ```bash
+# First time: generate and install dev dependencies
+pip install pip-tools
+pip-compile requirements-dev.in -o requirements-dev.txt
+pip install -r requirements-dev.txt
+
+# Run the test suite
 python -m pytest
 ```
 
