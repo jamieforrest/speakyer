@@ -184,12 +184,11 @@ class AnkiConnectExporter(CardExporter):
         parts.append(row["source_name"])
         if row["episode_title"]:
             parts.append(f"<i>{row['episode_title']}</i>")
-        lemma_enc = row["lemma"].replace(" ", "+")
-        lookup = (
-            f'<br><a href="https://www.linguee.com/german-english/search?query={lemma_enc}">linguee</a>'
-            f' · <a href="https://www.dict.cc/?s={lemma_enc}">dict.cc</a>'
-        )
-        return " · ".join(parts) + lookup
+        back = " · ".join(parts)
+        translation = row.get("translation") if isinstance(row, dict) else None
+        if translation:
+            back += f"<br><i>{translation}</i>"
+        return back
 
     @staticmethod
     def _build_tags(row) -> list[str]:

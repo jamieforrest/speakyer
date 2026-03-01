@@ -125,7 +125,8 @@ def run_stage(
 ) -> PipelineContext:
     ctx = PipelineContext(source_config=FAKE_SOURCE, episode=ep, dry_run=dry_run)
     with patch("speakyer.pipeline.stages.db", lambda: db(tmp_db)):
-        return NLPStage(extractor=extractor or FakeExtractor()).run(ctx)
+        # translator=None disables translation so tests don't load a real model.
+        return NLPStage(extractor=extractor or FakeExtractor(), translator=None).run(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +303,70 @@ class TestNLPStage:
         texts = [c["text"] for c in extractor.calls]
         assert "Guten Morgen Deutschland." in texts
         assert "Die Nachrichten beginnen." in texts
+
+    def test_segments_merged_into_full_sentences(self, tmp_db):
+        """Consecutive segments without terminal punctuation are merged."""
+        with db(tmp_db) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO sources (id, name, rss_url) VALUES (1, 'test', 'https://x.com')"
+            )
+            ep_cursor = conn.execute(
+                "INSERT INTO episodes (source_id, guid, title, status) "
+                "VALUES (1, 'g-merge', 'Merge Ep', 'transcribed')",
+            )
+            ep_id = ep_cursor.lastrowid
+            tr_cursor = conn.execute(
+                "INSERT INTO transcripts (episode_id, language_detected, duration_seconds) "
+                "VALUES (?, 'de', 6.0)",
+                (ep_id,),
+            )
+            tr_id = tr_cursor.lastrowid
+            # Three segments: first two don't end with terminal punctuation.
+            conn.executemany(
+                "INSERT INTO transcript_segments "
+                "(transcript_id, segment_index, text, start_time, end_time) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (tr_id, 0, "Die Regierung hat beschlossen,", 0.0, 2.0),
+                    (tr_id, 1, "dass die Steuern erhöht werden.", 2.0, 4.5),
+                    (tr_id, 2, "Das ist ein Problem.", 4.5, 6.0),
+                ],
+            )
+
+        ep = Episode(id=ep_id, guid="g-merge", source_id=1, title="Merge Ep", status="transcribed")
+
+        received: list[dict] = []
+
+        class RecordingExtractor(NLPExtractor):
+            def extract(self, text, episode_id, segment_id, start_time, cefr_lookup):
+                received.append({"text": text, "start_time": start_time})
+                return []
+
+        run_stage(ep, tmp_db, extractor=RecordingExtractor())
+
+        # Segments 0+1 should be merged; segment 2 is its own sentence.
+        assert len(received) == 2
+        assert received[0]["text"] == "Die Regierung hat beschlossen, dass die Steuern erhöht werden."
+        assert received[0]["start_time"] == 0.0
+        assert received[1]["text"] == "Das ist ein Problem."
+        assert received[1]["start_time"] == 4.5
+
+    def test_sentence_end_time_stored_on_words(self, tmp_db):
+        """Words carry sentence_end_time from the merged sentence's last segment."""
+        import sqlite3
+
+        ep, _ = seed_episode_with_transcript(tmp_db)
+        word = make_word("morgen", episode_id=ep.id, segment_id=1)
+        extractor = FakeExtractor({"Guten Morgen Deutschland.": [word]})
+        run_stage(ep, tmp_db, extractor=extractor)
+
+        conn = sqlite3.connect(str(tmp_db))
+        row = conn.execute(
+            "SELECT start_time, sentence_end_time FROM words WHERE episode_id = ?", (ep.id,)
+        ).fetchone()
+        conn.close()
+        assert row[0] == 0.0   # start_time of segment 0
+        assert row[1] == 2.5   # end_time of segment 0 (full sentence ends here)
 
     def test_words_with_no_cefr_match_have_null_level(self, tmp_db):
         ep, _ = seed_episode_with_transcript(tmp_db)

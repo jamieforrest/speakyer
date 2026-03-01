@@ -16,6 +16,8 @@ class Word:
     example_sentence: str
     start_time: float | None
     transcript_segment_id: int | None = None
+    sentence_end_time: float | None = None
+    translation: str | None = None
 
 
 class NLPExtractor(ABC):

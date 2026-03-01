@@ -1,8 +1,7 @@
 """Audio clip extractor for Speakyer.
 
-Given a word_id, loads the stored Whisper JSON transcript, locates the
-containing segment, and uses pydub to extract a padded MP3 clip.  The
-clip is written to ``data/clips/{word_id}.mp3``.
+Given a word_id, extracts a padded MP3 clip covering the full sentence that
+contains the word.  The clip is written to ``data/clips/{word_id}.mp3``.
 
 pydub and ffmpeg must be installed for this module to function::
 
@@ -27,7 +26,7 @@ from speakyer.database import db
 from speakyer.storage import LocalStorage
 from speakyer.transcription.base import Transcript
 
-_PADDING_MS = 500       # milliseconds added before/after the target segment
+_PADDING_MS = 500       # milliseconds added before/after the target sentence
 _CLIPS_REL_DIR = "clips"
 _MIN_MS_PER_WORD = 250  # below this → likely a Whisper hallucination
 
@@ -46,23 +45,34 @@ def purge_hallucinated_clips(
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT c.id            AS card_id,
+            SELECT c.id              AS card_id,
                    c.audio_clip_path,
-                   ts.text         AS seg_text,
-                   ts.start_time   AS seg_start,
-                   ts.end_time     AS seg_end
+                   w.example_sentence AS sentence_text,
+                   w.start_time       AS sentence_start,
+                   w.sentence_end_time,
+                   ts.text            AS seg_text,
+                   ts.start_time      AS seg_start,
+                   ts.end_time        AS seg_end
             FROM cards c
             JOIN words w              ON w.id  = c.word_id
-            JOIN transcript_segments ts ON ts.id = w.transcript_segment_id
+            LEFT JOIN transcript_segments ts ON ts.id = w.transcript_segment_id
             WHERE c.audio_clip_path IS NOT NULL
             """,
         ).fetchall()
 
         purged: list[dict] = []
         for row in rows:
-            word_count = len(row["seg_text"].split()) if row["seg_text"] else 1
+            # Use sentence-level boundaries when available.
+            sent_start = row["sentence_start"] if row["sentence_start"] is not None else row["seg_start"]
+            sent_end = row["sentence_end_time"] if row["sentence_end_time"] is not None else row["seg_end"]
+            sent_text = row["sentence_text"] or row["seg_text"] or ""
+
+            if sent_start is None or sent_end is None:
+                continue
+
+            word_count = len(sent_text.split()) if sent_text else 1
             min_duration_ms = word_count * _MIN_MS_PER_WORD
-            actual_duration_ms = (row["seg_end"] - row["seg_start"]) * 1000
+            actual_duration_ms = (sent_end - sent_start) * 1000
             if actual_duration_ms >= min_duration_ms:
                 continue
 
@@ -83,6 +93,11 @@ def purge_hallucinated_clips(
 
 class AudioClipper:
     """Extract audio clips for Anki flashcards.
+
+    Clips span the full sentence containing the target word (using
+    ``words.start_time`` / ``words.sentence_end_time`` set by NLPStage).
+    For words processed before sentence merging was introduced, falls back
+    to the single transcript segment boundaries via the stored Whisper JSON.
 
     All dependencies are injectable for testing without real audio files or a
     populated database.
@@ -116,25 +131,60 @@ class AudioClipper:
         """Extract an audio clip for *word_id*.
 
         Returns the absolute Path of the written ``.mp3`` clip, or ``None``
-        if prerequisites are not met (missing transcript link, JSON, or audio).
+        if prerequisites are not met (missing audio, implausible timestamps).
+
+        When ``sentence_end_time`` is stored on the word the clip spans the
+        full merged sentence; otherwise falls back to the single transcript
+        segment boundaries (legacy path for episodes processed before sentence
+        merging was introduced).
         """
         row = self._load_row(word_id)
         if row is None:
-            return None
-
-        json_path = self.storage.absolute_path(row["raw_json_path"])
-        if not json_path.exists():
             return None
 
         audio_path = self._resolve_audio(row["audio_path"])
         if audio_path is None:
             return None
 
-        # Skip segments that are implausibly short for their text length —
-        # these are almost always Whisper hallucinations with bad timestamps.
-        word_count = len(row["seg_text"].split()) if row["seg_text"] else 1
+        # Prefer sentence-level boundaries set by NLPStage after segment merging.
+        sentence_end = row["sentence_end_time"]
+        if sentence_end is not None:
+            sent_start = row["sentence_start"] if row["sentence_start"] is not None else row["seg_start"]
+            sent_end = sentence_end
+            sent_text = row["sentence_text"] or row["seg_text"] or ""
+        else:
+            # Legacy fallback: use single segment boundaries from the JSON.
+            sent_start = row["seg_start"]
+            sent_end = row["seg_end"]
+            sent_text = row["seg_text"] or ""
+
+            # Load the transcript JSON to resolve exact segment boundaries.
+            json_path = self.storage.absolute_path(row["raw_json_path"])
+            if not json_path.exists():
+                return None
+            json_key = str(json_path)
+            if json_key not in self._transcript_cache:
+                self._transcript_cache[json_key] = Transcript.from_dict(
+                    json.loads(json_path.read_bytes())
+                )
+            transcript = self._transcript_cache[json_key]
+            # Find exact boundaries in the JSON (within 50 ms tolerance).
+            seg = next(
+                (
+                    s
+                    for s in transcript.segments
+                    if abs(s.start - sent_start) < 0.05 and abs(s.end - sent_end) < 0.05
+                ),
+                None,
+            )
+            if seg is not None:
+                sent_start = seg.start
+                sent_end = seg.end
+
+        # Skip clips from implausibly short time spans — likely hallucinations.
+        word_count = len(sent_text.split()) if sent_text else 1
         min_duration_ms = word_count * _MIN_MS_PER_WORD
-        actual_duration_ms = (row["seg_end"] - row["seg_start"]) * 1000
+        actual_duration_ms = (sent_end - sent_start) * 1000
         if actual_duration_ms < min_duration_ms:
             return None
 
@@ -143,20 +193,8 @@ class AudioClipper:
         if self.storage.exists(rel_clip):
             return self.storage.absolute_path(rel_clip)
 
-        # Cache transcript and audio per path so repeated calls for the same
-        # episode only load each file once.
-        json_key = str(json_path)
-        if json_key not in self._transcript_cache:
-            self._transcript_cache[json_key] = Transcript.from_dict(
-                json.loads(json_path.read_bytes())
-            )
-        transcript = self._transcript_cache[json_key]
-
-        start_ms, end_ms = self._boundaries(
-            transcript,
-            seg_start=row["seg_start"],
-            seg_end=row["seg_end"],
-        )
+        start_ms = max(0, int(sent_start * 1000) - self.padding_ms)
+        end_ms = int(sent_end * 1000) + self.padding_ms
         return self._write_clip(audio_path, start_ms, end_ms, word_id)
 
     # ------------------------------------------------------------------
@@ -169,15 +207,18 @@ class AudioClipper:
             return conn.execute(
                 """
                 SELECT w.surface_form,
-                       ts.start_time AS seg_start,
-                       ts.end_time   AS seg_end,
-                       ts.text       AS seg_text,
+                       w.start_time       AS sentence_start,
+                       w.sentence_end_time,
+                       w.example_sentence AS sentence_text,
+                       ts.start_time      AS seg_start,
+                       ts.end_time        AS seg_end,
+                       ts.text            AS seg_text,
                        t.raw_json_path,
                        e.audio_path
                 FROM words w
-                JOIN transcript_segments ts ON ts.id = w.transcript_segment_id
-                JOIN transcripts t          ON t.id  = ts.transcript_id
-                JOIN episodes e             ON e.id  = w.episode_id
+                LEFT JOIN transcript_segments ts ON ts.id = w.transcript_segment_id
+                LEFT JOIN transcripts t          ON t.id  = ts.transcript_id
+                JOIN episodes e                  ON e.id  = w.episode_id
                 WHERE w.id = ?
                 """,
                 (word_id,),
@@ -188,38 +229,6 @@ class AudioClipper:
             return None
         p = self.storage.absolute_path(audio_path)
         return p if p.exists() else None
-
-    def _boundaries(
-        self,
-        transcript: Transcript,
-        seg_start: float,
-        seg_end: float,
-    ) -> tuple[int, int]:
-        """Return ``(start_ms, end_ms)`` for the clip.
-
-        Finds the matching transcript segment by start/end proximity and returns
-        the full segment boundaries expanded by ``self.padding_ms`` on each side,
-        so the clip covers the entire displayed sentence.
-        """
-        seg = next(
-            (
-                s
-                for s in transcript.segments
-                if abs(s.start - seg_start) < 0.05 and abs(s.end - seg_end) < 0.05
-            ),
-            None,
-        )
-
-        if seg is None:
-            # Segment not found in JSON (shouldn't happen, but degrade gracefully).
-            start_ms = max(0, int(seg_start * 1000) - self.padding_ms)
-            end_ms = int(seg_end * 1000) + self.padding_ms
-            return start_ms, end_ms
-
-        # Use the full segment so the clip covers the whole displayed sentence.
-        start_ms = max(0, int(seg.start * 1000) - self.padding_ms)
-        end_ms = int(seg.end * 1000) + self.padding_ms
-        return start_ms, end_ms
 
     def _write_clip(
         self, audio_path: Path, start_ms: int, end_ms: int, word_id: int

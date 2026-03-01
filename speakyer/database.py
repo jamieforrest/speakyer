@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS words (
     cefr_level TEXT,
     example_sentence TEXT,
     start_time REAL,
+    sentence_end_time REAL,
+    translation TEXT,
     user_id INTEGER REFERENCES users(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -134,11 +136,28 @@ def db(db_path: Path | None = None) -> Generator[sqlite3.Connection, None, None]
         conn.close()
 
 
+# Migrations to apply after initial schema creation (for existing databases).
+_MIGRATIONS = [
+    "ALTER TABLE words ADD COLUMN sentence_end_time REAL",
+    "ALTER TABLE words ADD COLUMN translation TEXT",
+]
+
+
 def init(db_path: Path | None = None) -> None:
-    """Create all tables. Safe to call multiple times (uses IF NOT EXISTS)."""
+    """Create all tables and apply pending migrations.
+
+    Safe to call multiple times — uses IF NOT EXISTS for tables and swallows
+    OperationalError for ALTER TABLE when the column already exists.
+    """
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA)
         conn.commit()
+        for stmt in _MIGRATIONS:
+            try:
+                conn.execute(stmt)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists — safe to ignore
     finally:
         conn.close()

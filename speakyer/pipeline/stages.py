@@ -174,17 +174,90 @@ class TranscribeStage(PipelineStage):
         return ctx
 
 
+_SENTENCE_TERMINAL = frozenset(".!?…")
+_MAX_MERGE = 8  # maximum consecutive segments to merge into one sentence
+
+
+def _merge_segments_into_sentences(segments: list) -> list[dict]:
+    """Group consecutive transcript segments into complete sentences.
+
+    A sentence is complete when its trailing text ends with terminal
+    punctuation (.  !  ?  …  or a closing quote after such punctuation).
+    At most ``_MAX_MERGE`` segments are merged without a terminal marker, to
+    prevent runaway merges in long non-sentence chunks.
+
+    Returns a list of dicts with keys:
+        primary_segment_id  – DB id of the first segment in the group
+        text                – merged sentence text
+        start_time          – start_time of the first segment
+        end_time            – end_time of the last segment
+    """
+
+    def _ends_sentence(text: str) -> bool:
+        t = text.rstrip()
+        if not t:
+            return False
+        # Handle closing quote or bracket after terminal: ."  !"  ?"
+        if len(t) >= 2 and t[-1] in '"»"' and t[-2] in ".!?":
+            return True
+        return t[-1] in _SENTENCE_TERMINAL
+
+    sentences: list[dict] = []
+    buffer: list = []
+
+    for seg in segments:
+        buffer.append(seg)
+        if _ends_sentence(seg["text"]) or len(buffer) >= _MAX_MERGE:
+            merged_text = " ".join(s["text"].strip() for s in buffer).strip()
+            sentences.append(
+                {
+                    "primary_segment_id": buffer[0]["id"],
+                    "text": merged_text,
+                    "start_time": buffer[0]["start_time"],
+                    "end_time": buffer[-1]["end_time"],
+                }
+            )
+            buffer = []
+
+    if buffer:
+        merged_text = " ".join(s["text"].strip() for s in buffer).strip()
+        sentences.append(
+            {
+                "primary_segment_id": buffer[0]["id"],
+                "text": merged_text,
+                "start_time": buffer[0]["start_time"],
+                "end_time": buffer[-1]["end_time"],
+            }
+        )
+
+    return sentences
+
+
+_TRANSLATOR_UNSET = object()  # sentinel to distinguish "not injected" from None
+
+
 class NLPStage(PipelineStage):
     """Extract vocabulary from transcript segments and look up CEFR levels.
 
     Words are stored in the ``words`` table, one row per token per segment.
+    Consecutive segments that don't end with terminal punctuation are merged
+    into complete sentences before extraction, so each word's
+    ``example_sentence`` is a full sentence.
+
     Episode status advances to ``"analyzed"`` after completion.
 
-    An injectable *extractor* enables testing without a real spaCy model.
+    Injectable *extractor* and *translator* enable testing without real models:
+    - pass ``extractor=FakeExtractor(...)`` to skip spaCy
+    - pass ``translator=None`` to disable translation in tests
     """
 
-    def __init__(self, extractor: NLPExtractor | None = None) -> None:
+    def __init__(
+        self,
+        extractor: NLPExtractor | None = None,
+        translator=_TRANSLATOR_UNSET,
+    ) -> None:
         self._extractor = extractor
+        self._translator_arg = translator
 
     @property
     def extractor(self) -> NLPExtractor:
@@ -193,6 +266,19 @@ class NLPStage(PipelineStage):
 
             self._extractor = SpacyExtractor(config.spacy_model)
         return self._extractor
+
+    @property
+    def translator(self):
+        """Return a Translator instance or None if translation is disabled."""
+        if self._translator_arg is _TRANSLATOR_UNSET:
+            model = config.translation_model
+            if model and model.lower() != "none":
+                from speakyer.nlp.translator import Translator
+
+                self._translator_arg = Translator(model)
+            else:
+                self._translator_arg = None
+        return self._translator_arg
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         ep = ctx.episode
@@ -206,11 +292,11 @@ class NLPStage(PipelineStage):
             print(f"  [skip] {ep.title!r}: already analyzed ({existing_count} words)")
             return ctx
 
-        # Load transcript segments from DB.
+        # Load transcript segments from DB (include end_time for sentence merging).
         with db() as conn:
             segments = conn.execute(
                 """
-                SELECT ts.id, ts.text, ts.start_time
+                SELECT ts.id, ts.text, ts.start_time, ts.end_time
                 FROM transcript_segments ts
                 JOIN transcripts t ON ts.transcript_id = t.id
                 WHERE t.episode_id = ?
@@ -232,17 +318,32 @@ class NLPStage(PipelineStage):
             cefr_rows = conn.execute("SELECT lemma, level FROM cefr_words").fetchall()
         cefr_lookup: dict[str, str] = {row["lemma"]: row["level"] for row in cefr_rows}
 
-        # Extract words from each segment.
+        # Merge consecutive segments into full sentences, then extract words.
+        sentences = _merge_segments_into_sentences(list(segments))
         all_words: list[Word] = []
-        for seg in segments:
+        for sent in sentences:
             words = self.extractor.extract(
-                text=seg["text"],
+                text=sent["text"],
                 episode_id=ep.id,
-                segment_id=seg["id"],
-                start_time=seg["start_time"],
+                segment_id=sent["primary_segment_id"],
+                start_time=sent["start_time"],
                 cefr_lookup=cefr_lookup,
             )
+            # Stamp each word with sentence-level time bounds.
+            for w in words:
+                w.start_time = sent["start_time"]
+                w.sentence_end_time = sent["end_time"]
             all_words.extend(words)
+
+        # Translate unique example sentences if a translator is configured.
+        translator = self.translator
+        if translator is not None and all_words:
+            unique_sentences = list({w.example_sentence for w in all_words if w.example_sentence})
+            print(f"  Translating {len(unique_sentences)} unique sentence(s) ...")
+            translated = translator.translate_batch(unique_sentences)
+            translation_map = dict(zip(unique_sentences, translated))
+            for w in all_words:
+                w.translation = translation_map.get(w.example_sentence)
 
         # Persist to DB.
         with db() as conn:
@@ -250,8 +351,9 @@ class NLPStage(PipelineStage):
                 """
                 INSERT INTO words
                     (episode_id, transcript_segment_id, surface_form, lemma,
-                     pos, cefr_level, example_sentence, start_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     pos, cefr_level, example_sentence, start_time,
+                     sentence_end_time, translation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -263,6 +365,8 @@ class NLPStage(PipelineStage):
                         w.cefr_level,
                         w.example_sentence,
                         w.start_time,
+                        w.sentence_end_time,
+                        w.translation,
                     )
                     for w in all_words
                 ],
@@ -417,7 +521,7 @@ class ExportStage(PipelineStage):
                 SELECT c.id AS card_id, c.word_id, c.deck_name,
                        c.audio_clip_path,
                        w.lemma, w.surface_form, w.pos, w.cefr_level,
-                       w.example_sentence,
+                       w.example_sentence, w.translation,
                        e.title AS episode_title, e.published_at,
                        s.name AS source_name
                 FROM cards c
@@ -590,7 +694,7 @@ class CardUpdateStage(PipelineStage):
                 SELECT c.id AS card_id, c.anki_note_id, c.audio_clip_path,
                        c.status AS card_status,
                        w.lemma, w.surface_form, w.pos, w.cefr_level,
-                       w.example_sentence, c.deck_name,
+                       w.example_sentence, w.translation, c.deck_name,
                        e.title AS episode_title, e.published_at,
                        s.name AS source_name
                 FROM cards c
