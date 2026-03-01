@@ -581,7 +581,8 @@ class CardUpdateStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         ep = ctx.episode
-        status_filter = "('exported', 'audio_updated')" if ctx.resync_tags else "('exported')"
+        statuses = ("exported", "audio_updated") if ctx.resync_tags else ("exported",)
+        placeholders = ",".join("?" * len(statuses))
 
         with db() as conn:
             rows = conn.execute(
@@ -599,10 +600,10 @@ class CardUpdateStage(PipelineStage):
                 WHERE w.episode_id = ?
                   AND c.anki_note_id IS NOT NULL
                   AND c.audio_clip_path IS NOT NULL
-                  AND c.status IN {status_filter}
+                  AND c.status IN ({placeholders})
                 ORDER BY c.id
                 """,
-                (ep.id,),
+                (ep.id, *statuses),
             ).fetchall()
 
         if not rows:

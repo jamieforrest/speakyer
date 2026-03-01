@@ -180,7 +180,8 @@ def audio_update(source: str | None, dry_run: bool, episode_id: int | None, resy
 
     init()
 
-    status_filter = "('pending', 'exported', 'audio_updated')" if resync_tags else "('pending', 'exported')"
+    statuses = ("pending", "exported", "audio_updated") if resync_tags else ("pending", "exported")
+    placeholders = ",".join("?" * len(statuses))
 
     with db() as conn:
         ep_rows = conn.execute(
@@ -193,9 +194,10 @@ def audio_update(source: str | None, dry_run: bool, episode_id: int | None, resy
             JOIN words w ON w.episode_id = e.id
             JOIN cards c ON c.word_id = w.id
             JOIN sources s ON s.id = e.source_id
-            WHERE c.status IN {status_filter}
+            WHERE c.status IN ({placeholders})
             ORDER BY e.id
             """,
+            statuses,
         ).fetchall()
 
     if episode_id:
@@ -299,7 +301,7 @@ def episodes() -> None:
     for row in rows:
         symbol = STATUS_SYMBOLS.get(row["status"], "?")
         dt = row["published_at"]
-        published = dt.strftime("%Y-%m-%d") if dt else ""
+        published = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10] if dt else ""
         title = (row["title"] or "")[:48]
         click.echo(f"{row['id']:<5}  {symbol}   {row['source']:<20}  {published:<12}  {title}")
 
@@ -593,7 +595,8 @@ def db() -> None:
             click.echo(f"  {table}: (table not found)\n")
             continue
 
-        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        quoted = f'"{table}"'
+        count = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
         bar = "─" * 52
         click.echo(bar)
         click.echo(f"  {table}  ({count} row{'s' if count != 1 else ''})")
@@ -603,7 +606,7 @@ def db() -> None:
             click.echo("  (empty)\n")
             continue
 
-        cursor = conn.execute(f"SELECT * FROM {table} LIMIT 0")
+        cursor = conn.execute(f"SELECT * FROM {quoted} LIMIT 0")
         cols = [d[0] for d in cursor.description]
         col_w = min(16, max(len(c) for c in cols))
         widths = [max(len(c), col_w) for c in cols]
@@ -613,7 +616,7 @@ def db() -> None:
         click.echo("  " + "  ".join("-" * w for w in widths))
 
         rows = conn.execute(
-            f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT 3"
+            f"SELECT * FROM {quoted} ORDER BY rowid DESC LIMIT 3"
         ).fetchall()
         for row in reversed(rows):
             cells = [truncate(v, w).ljust(w) for v, w in zip(row, widths)]
