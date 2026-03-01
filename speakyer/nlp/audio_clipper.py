@@ -31,6 +31,25 @@ _CLIPS_REL_DIR = "clips"
 _MIN_MS_PER_WORD = 250  # below this → likely a Whisper hallucination
 
 
+def _clip_duration_ms(path: "Path") -> int | None:
+    """Return the duration of an MP3 clip in milliseconds, or None on error.
+
+    Tries mutagen first (fast header-only read); falls back to pydub which is
+    already a required dependency.  Returns None if both fail so the caller
+    can treat the clip as acceptable rather than deleting it unnecessarily.
+    """
+    try:
+        from mutagen.mp3 import MP3  # type: ignore[import]
+        return int(MP3(path).info.length * 1000)
+    except Exception:
+        pass
+    try:
+        from pydub import AudioSegment  # type: ignore[import]
+        return len(AudioSegment.from_file(str(path)))
+    except Exception:
+        return None
+
+
 def purge_hallucinated_clips(
     storage: "LocalStorage | None" = None,
 ) -> list[dict]:
@@ -188,13 +207,22 @@ class AudioClipper:
         if actual_duration_ms < min_duration_ms:
             return None
 
-        # Idempotent: return existing clip without re-extracting.
-        rel_clip = f"{self.clips_dir}/{word_id}.mp3"
-        if self.storage.exists(rel_clip):
-            return self.storage.absolute_path(rel_clip)
-
         start_ms = max(0, int(sent_start * 1000) - self.padding_ms)
         end_ms = int(sent_end * 1000) + self.padding_ms
+        expected_ms = end_ms - start_ms
+
+        # Idempotent: return existing clip if its duration matches expectations.
+        # A >1 s discrepancy means the file is stale (cut from old timestamps)
+        # and must be regenerated.
+        rel_clip = f"{self.clips_dir}/{word_id}.mp3"
+        if self.storage.exists(rel_clip):
+            abs_clip = self.storage.absolute_path(rel_clip)
+            actual_ms = _clip_duration_ms(abs_clip)
+            if actual_ms is None or abs(actual_ms - expected_ms) <= 1000:
+                return abs_clip
+            # Stale — delete and fall through to re-extract.
+            abs_clip.unlink()
+
         return self._write_clip(audio_path, start_ms, end_ms, word_id)
 
     # ------------------------------------------------------------------
