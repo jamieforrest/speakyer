@@ -19,6 +19,7 @@ dependencies = [
     "click>=8.1",
     "pydub>=0.25",
     "transformers>=4.40",
+    "sentencepiece>=0.1.99",
 ]
 
 [project.scripts]
