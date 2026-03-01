@@ -107,17 +107,13 @@ with audio clips, and exports everything to Anki in one pass.
 
 ## Daily usage
 
-The typical daily workflow is two commands:
-
 ```bash
-speakyer run            # fetch new episodes, process, and export to Anki
-speakyer audio-update   # attach audio clips to any cards that need them
+speakyer run
 ```
 
-`speakyer run` handles the full pipeline: download, transcribe, NLP, card
-generation, audio clip extraction, and Anki export. `speakyer audio-update`
-is a lighter pass that adds audio clips to existing cards and syncs
-fields/tags. Anki must be running for both.
+That's it. This fetches new episodes, transcribes, extracts vocabulary,
+generates audio clips, and exports cards to Anki — all in one pass.
+Anki must be running.
 
 If you want to process a single source or episode:
 
@@ -135,7 +131,7 @@ All interaction goes through the `speakyer` CLI:
 | Command | Description |
 |---|---|
 | `speakyer run` | Full pipeline: fetch, transcribe, NLP, cards, audio, export |
-| `speakyer audio-update` | Add audio clips to existing Anki cards and sync fields/tags |
+| `speakyer audio-update` | Backfill audio clips or resync fields/tags on existing cards |
 | `speakyer fix-clips` | Remove audio clips from Whisper-hallucinated segments |
 | `speakyer episodes` | List fetched episodes with source and processing status |
 | `speakyer transcript <id>` | Pretty-print a transcript with timestamps |
