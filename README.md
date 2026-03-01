@@ -144,6 +144,7 @@ All interaction goes through the `speakyer` CLI:
 
 ```bash
 speakyer run --dry-run                 # preview without writing
+speakyer run --since 2026-03-01         # only episodes from today onwards
 speakyer run --stage transcribe        # run up to a specific stage
 speakyer run --source tagesschau       # process one source
 speakyer run --episode-id 1            # process one episode

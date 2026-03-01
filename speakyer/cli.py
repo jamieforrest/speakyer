@@ -56,7 +56,8 @@ def _load_stages(names: list[str]) -> list:
     help="Run up to and including this stage (default: all)",
 )
 @click.option("--whisper-model", default=None, metavar="MODEL", help="Override the Whisper model for this run")
-def run(source: str | None, dry_run: bool, episode_id: int | None, stage: str | None, whisper_model: str | None) -> None:
+@click.option("--since", default=None, metavar="DATE", help="Only process episodes published on or after DATE (YYYY-MM-DD)")
+def run(source: str | None, dry_run: bool, episode_id: int | None, stage: str | None, whisper_model: str | None, since: str | None) -> None:
     """Fetch, transcribe, and export vocabulary from podcasts."""
     import speakyer.config as _cfg_module
     from speakyer.database import init
@@ -70,9 +71,20 @@ def run(source: str | None, dry_run: bool, episode_id: int | None, stage: str | 
     )
     from speakyer.sources.rss import RSSPodcastSource
 
+    from datetime import datetime
+
     if whisper_model:
         _cfg_module.config.whisper_model = whisper_model
         click.echo(f"Using Whisper model: {whisper_model}")
+
+    since_dt: datetime | None = None
+    if since:
+        try:
+            since_dt = datetime.strptime(since, "%Y-%m-%d")
+        except ValueError:
+            click.echo(f"Invalid date format: {since!r}  (expected YYYY-MM-DD)")
+            sys.exit(1)
+        click.echo(f"Filtering episodes published since {since}")
 
     init()
 
@@ -120,6 +132,9 @@ def run(source: str | None, dry_run: bool, episode_id: int | None, stage: str | 
         known = get_known_guids(src.id)
         new_episodes = rss.get_new_episodes(src, known)
 
+        if since_dt:
+            new_episodes = [ep for ep in new_episodes if ep.published_at and ep.published_at >= since_dt]
+
         if dry_run:
             total_new += len(new_episodes)
             episodes_to_process = new_episodes
@@ -127,6 +142,8 @@ def run(source: str | None, dry_run: bool, episode_id: int | None, stage: str | 
             inserted = insert_episodes(new_episodes)
             total_new += len(inserted)
             episodes_to_process = get_pending_episodes(src.id, pending_statuses)
+            if since_dt:
+                episodes_to_process = [ep for ep in episodes_to_process if ep.published_at and ep.published_at >= since_dt]
 
         if not episodes_to_process:
             click.echo("  No episodes to process.")
