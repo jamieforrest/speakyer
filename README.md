@@ -2,14 +2,10 @@
 
 Podcast language learning pipeline. Speakyer downloads podcast episodes,
 transcribes them with Whisper, extracts vocabulary tagged by CEFR level (A1–C2),
-and pushes flashcards to Anki.
+generates audio clips for each word in context, and pushes flashcards to Anki.
 
 **Language support:** Starting with German. Additional languages are planned —
 the pipeline is designed to be language-agnostic from the ground up.
-
-**Current status:** Milestone 4 — card generation complete.
-AnkiConnect export is coming in the next milestone.
-See the [milestone plan](#milestones) below.
 
 ---
 
@@ -18,8 +14,9 @@ See the [milestone plan](#milestones) below.
 1. Speakyer reads your `sources.yaml` to find podcast RSS feeds
 2. New episodes are downloaded and transcribed locally using Whisper (fast on Apple Silicon)
 3. Vocabulary is extracted, lemmatized, and tagged with CEFR level using spaCy
-4. Flashcards with context sentences are pushed to Anki via AnkiConnect
-5. Cards are tagged by level (`cefr::B2`), podcast, and date — study what you want in Anki
+4. Audio clips are extracted for each word's context sentence
+5. Flashcards with audio and context sentences are pushed to Anki via AnkiConnect
+6. Cards are tagged by level (`cefr::B2`), podcast, and date — study what you want in Anki
 
 ---
 
@@ -27,7 +24,7 @@ See the [milestone plan](#milestones) below.
 
 - macOS with Apple Silicon (M1/M2/M3) — transcription uses `mlx-whisper`
 - Python 3.11+
-- [Anki desktop](https://apps.ankiweb.net/)
+- [Anki desktop](https://apps.ankiweb.net/) with AnkiConnect add-on
 - ffmpeg: `brew install ffmpeg`
 
 ---
@@ -72,44 +69,94 @@ For German (default):
 python -m spacy download de_core_news_lg
 ```
 
-### 5. Install AnkiConnect in Anki desktop
+### 4. Install AnkiConnect in Anki desktop
 
 1. Open Anki → Tools → Add-ons → Get Add-ons
 2. Enter code: `2055492159`
 3. Restart Anki
 
-Anki must be running whenever you run `speakyer run`.
+Anki must be running whenever you run `speakyer run` or `speakyer audio-update`.
 
-### 6. Configure podcast sources
+### 5. Configure podcast sources
 
 Edit `sources.yaml` to define your podcast feeds (see [Sources](#sources) below).
 
-### 7. Initialise the database
+### 6. Seed the CEFR vocabulary table
 
 ```bash
-python scripts/db_inspect.py
+speakyer seed-cefr
 ```
 
-This creates `speakyer.db` and shows the empty schema.
+This loads the bundled `data/cefr/de.csv` word list so the NLP pipeline can tag
+vocabulary by CEFR level. You can also provide a custom CSV:
+
+```bash
+speakyer seed-cefr path/to/custom.csv
+```
+
+### 7. Run the pipeline
+
+```bash
+speakyer run
+```
+
+This fetches new episodes, transcribes, extracts vocabulary, generates cards
+with audio clips, and exports everything to Anki in one pass.
 
 ---
 
-## Running
+## Daily usage
+
+The typical daily workflow is two commands:
 
 ```bash
-python scripts/run_pipeline.py                         # all active sources
-python scripts/run_pipeline.py --source tagesschau    # one source only
-python scripts/run_pipeline.py --dry-run              # preview without writing
-python scripts/run_pipeline.py --stage download       # download only
-python scripts/run_pipeline.py --stage transcribe     # download + transcribe
-python scripts/run_pipeline.py --stage nlp            # download + transcribe + NLP
-python scripts/list_episodes.py                       # check what was fetched
-python scripts/show_transcript.py <episode_id>        # view transcript
-python scripts/show_words.py <episode_id>             # vocabulary grouped by CEFR level
-python scripts/show_words.py <episode_id> --level B1  # filter to a single CEFR level
-python scripts/show_words.py <episode_id> --unique    # deduplicated lemmas only
-python scripts/seed_cefr.py                           # seed CEFR table from data/cefr/de.csv
-python scripts/seed_cefr.py path/to/custom.csv       # seed from a custom word list
+speakyer run            # fetch new episodes, process, and export to Anki
+speakyer audio-update   # attach audio clips to any cards that need them
+```
+
+`speakyer run` handles the full pipeline: download, transcribe, NLP, card
+generation, audio clip extraction, and Anki export. `speakyer audio-update`
+is a lighter pass that adds audio clips to existing cards and syncs
+fields/tags. Anki must be running for both.
+
+If you want to process a single source or episode:
+
+```bash
+speakyer run --source tagesschau
+speakyer run --episode-id 42
+```
+
+---
+
+## CLI commands
+
+All interaction goes through the `speakyer` CLI:
+
+| Command | Description |
+|---|---|
+| `speakyer run` | Full pipeline: fetch, transcribe, NLP, cards, audio, export |
+| `speakyer audio-update` | Add audio clips to existing Anki cards and sync fields/tags |
+| `speakyer fix-clips` | Remove audio clips from Whisper-hallucinated segments |
+| `speakyer episodes` | List fetched episodes with source and processing status |
+| `speakyer transcript <id>` | Pretty-print a transcript with timestamps |
+| `speakyer words <id>` | Display vocabulary grouped by CEFR level |
+| `speakyer cards <id>` | Preview Anki cards for an episode |
+| `speakyer db` | Inspect the database: table counts and recent rows |
+| `speakyer seed-cefr [path]` | Seed the CEFR vocabulary table from CSV |
+
+### Common options
+
+```bash
+speakyer run --dry-run                 # preview without writing
+speakyer run --stage transcribe        # run up to a specific stage
+speakyer run --source tagesschau       # process one source
+speakyer run --episode-id 1            # process one episode
+speakyer run --whisper-model mlx-community/whisper-small-mlx  # faster model
+speakyer audio-update --resync-tags    # re-push tags to all cards
+speakyer words 1 --level B1           # filter to a CEFR level
+speakyer words 1 --unique             # deduplicated lemmas only
+speakyer transcript 1 --words         # show word-level timestamps
+speakyer cards 1 --status pending     # filter by card status
 ```
 
 ---
@@ -163,18 +210,6 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-### Inspection scripts
-
-These scripts evolve alongside the milestones as new data is available.
-
-| Script | What it shows |
-|---|---|
-| `python scripts/db_inspect.py` | Table counts and recent rows |
-| `python scripts/list_episodes.py` | Fetched episodes with status *(Milestone 1)* |
-| `python scripts/show_transcript.py <id>` | Transcript with timestamps *(Milestone 2)* |
-| `python scripts/show_words.py <id>` | Vocabulary grouped by CEFR level |
-| `python scripts/show_cards.py <id>` | Card preview before Anki export *(Milestone 4)* |
-
 ### Environment variable overrides
 
 | Variable | Default | Description |
@@ -192,14 +227,14 @@ These scripts evolve alongside the milestones as new data is available.
 
 | Milestone | Description | Status |
 |---|---|---|
-| 0 | Project foundation: schema, config, storage abstraction | ✅ Done |
-| 1 | Source configuration & audio download | ✅ Done |
-| 2 | Whisper transcription (local, Apple Silicon) | ✅ Done |
-| 3 | NLP pipeline + CEFR vocabulary tagging | ✅ Done |
-| 4 | Anki card generation | ✅ Done |
-| 5 | Pipeline runner + AnkiConnect export | Pending |
-| 6 | Hardening, idempotency, v1 complete | Pending |
-| 7 | Audio clips in flashcards (v1.1) | Pending |
+| 0 | Project foundation: schema, config, storage abstraction | Done |
+| 1 | Source configuration & audio download | Done |
+| 2 | Whisper transcription (local, Apple Silicon) | Done |
+| 3 | NLP pipeline + CEFR vocabulary tagging | Done |
+| 4 | Anki card generation | Done |
+| 5 | Pipeline runner + AnkiConnect export | Done |
+| 6 | Hardening, idempotency, v1 complete | In progress |
+| 7 | Audio clips in flashcards | Done |
 
 ---
 
