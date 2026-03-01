@@ -619,6 +619,32 @@ class AudioClipStage(PipelineStage):
     def run(self, ctx: PipelineContext) -> PipelineContext:
         ep = ctx.episode
 
+        # Null out audio_clip_path for any card whose file has been deleted
+        # from disk (e.g. after a manual `rm -rf data/clips/`), so the query
+        # below re-queues them for extraction.
+        with db() as conn:
+            existing = conn.execute(
+                """
+                SELECT c.id AS card_id, c.audio_clip_path
+                FROM cards c
+                JOIN words w ON c.word_id = w.id
+                WHERE w.episode_id = ? AND c.audio_clip_path IS NOT NULL
+                  AND c.status IN ('pending', 'exported')
+                """,
+                (ep.id,),
+            ).fetchall()
+        missing_ids = [
+            r["card_id"]
+            for r in existing
+            if not self.clipper.storage.absolute_path(r["audio_clip_path"]).exists()
+        ]
+        if missing_ids:
+            with db() as conn:
+                conn.executemany(
+                    "UPDATE cards SET audio_clip_path = NULL WHERE id = ?",
+                    [(cid,) for cid in missing_ids],
+                )
+
         with db() as conn:
             rows = conn.execute(
                 """
