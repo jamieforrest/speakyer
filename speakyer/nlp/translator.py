@@ -58,11 +58,22 @@ class Translator:
                 "transformers is not installed. "
                 "Run: pip install transformers torch"
             )
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
         print(f"  Loading translation model {self.model!r} (first use — may download) ...")
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model)
-        self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model)
+
+        # AutoTokenizer may not map MarianConfig in all transformers versions,
+        # so fall back to the concrete Marian classes for Helsinki-NLP/opus-mt-*
+        # models. Non-Marian models (e.g. NLLB) work via the Auto path.
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model)
+            self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model)
+        except (ValueError, OSError):
+            from transformers import MarianMTModel, MarianTokenizer
+
+            self._tokenizer = MarianTokenizer.from_pretrained(self.model)
+            self._model = MarianMTModel.from_pretrained(self.model)
 
     def translate(self, text: str) -> str:
         """Translate *text* and return the translated string.
