@@ -32,6 +32,55 @@ _CLIPS_REL_DIR = "clips"
 _MIN_MS_PER_WORD = 250  # below this → likely a Whisper hallucination
 
 
+def purge_hallucinated_clips(
+    storage: "LocalStorage | None" = None,
+) -> list[dict]:
+    """Find cards whose clips came from hallucinated segments and remove them.
+
+    Returns a list of dicts ``{"card_id": int, "clip_path": str}`` for every
+    card that was purged.
+    """
+    if storage is None:
+        storage = LocalStorage(config.data_dir)
+
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id            AS card_id,
+                   c.audio_clip_path,
+                   ts.text         AS seg_text,
+                   ts.start_time   AS seg_start,
+                   ts.end_time     AS seg_end
+            FROM cards c
+            JOIN words w              ON w.id  = c.word_id
+            JOIN transcript_segments ts ON ts.id = w.transcript_segment_id
+            WHERE c.audio_clip_path IS NOT NULL
+            """,
+        ).fetchall()
+
+        purged: list[dict] = []
+        for row in rows:
+            word_count = len(row["seg_text"].split()) if row["seg_text"] else 1
+            min_duration_ms = word_count * _MIN_MS_PER_WORD
+            actual_duration_ms = (row["seg_end"] - row["seg_start"]) * 1000
+            if actual_duration_ms >= min_duration_ms:
+                continue
+
+            # Delete the clip file if it exists on disk.
+            clip_rel = row["audio_clip_path"]
+            abs_clip = storage.absolute_path(clip_rel)
+            if abs_clip.exists():
+                abs_clip.unlink()
+
+            conn.execute(
+                "UPDATE cards SET audio_clip_path = NULL WHERE id = ?",
+                (row["card_id"],),
+            )
+            purged.append({"card_id": row["card_id"], "clip_path": clip_rel})
+
+    return purged
+
+
 class AudioClipper:
     """Extract audio clips for Anki flashcards.
 

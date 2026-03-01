@@ -1,4 +1,4 @@
-"""Tests for AudioClipper, AudioClipStage, and CardUpdateStage."""
+"""Tests for AudioClipper, AudioClipStage, CardUpdateStage, and purge_hallucinated_clips."""
 
 import json
 import sqlite3
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from speakyer.database import db
-from speakyer.nlp.audio_clipper import AudioClipper
+from speakyer.nlp.audio_clipper import AudioClipper, purge_hallucinated_clips
 from speakyer.pipeline.base import PipelineContext
 from speakyer.cards.anki_connect import AnkiConnectExporter
 from speakyer.pipeline.stages import AudioClipStage, CardUpdateStage
@@ -401,3 +401,130 @@ class TestBuildNoteAudioAttachment:
         assert note["audio"][0]["path"] == "/data/clips/7.mp3"
         assert note["audio"][0]["filename"] == "speakyer_7.mp3"
         assert note["audio"][0]["fields"] == ["Front"]
+
+
+# ---------------------------------------------------------------------------
+# purge_hallucinated_clips tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_card_with_segment(
+    tmp_db: Path,
+    tmp_path: Path,
+    *,
+    seg_text: str,
+    seg_start: float,
+    seg_end: float,
+    clip_path: str | None = "clips/1.mp3",
+) -> int:
+    """Seed a card linked to a segment with the given timing. Returns card id."""
+    with db(tmp_db) as conn:
+        conn.execute("INSERT OR IGNORE INTO sources (id, name, rss_url) VALUES (1, 'src', 'x')")
+        ep_id = conn.execute(
+            "INSERT INTO episodes (source_id, guid, title, audio_path, status) "
+            "VALUES (1, 'g-purge', 'Ep', 'audio/1.mp3', 'exported')"
+        ).lastrowid
+        tr_id = conn.execute(
+            "INSERT INTO transcripts (episode_id, raw_json_path) VALUES (?, 'transcripts/1.json')",
+            (ep_id,),
+        ).lastrowid
+        seg_id = conn.execute(
+            "INSERT INTO transcript_segments (transcript_id, segment_index, text, start_time, end_time) "
+            "VALUES (?, 0, ?, ?, ?)",
+            (tr_id, seg_text, seg_start, seg_end),
+        ).lastrowid
+        w_id = conn.execute(
+            "INSERT INTO words (episode_id, transcript_segment_id, surface_form, lemma, pos, "
+            "example_sentence, start_time) VALUES (?, ?, 'Welt', 'welt', 'NOUN', ?, ?)",
+            (ep_id, seg_id, seg_text, seg_start),
+        ).lastrowid
+        card_id = conn.execute(
+            "INSERT INTO cards (word_id, deck_name, status, audio_clip_path) VALUES (?, 'Speakyer', 'exported', ?)",
+            (w_id, clip_path),
+        ).lastrowid
+    return card_id
+
+
+class TestPurgeHallucinatedClips:
+    def test_purges_card_with_short_segment(self, tmp_db, tmp_path):
+        """A 5-word segment in 0.88s (176ms/word) should be purged."""
+        storage = LocalStorage(tmp_path / "data")
+        storage.write("clips/1.mp3", b"BAD_CLIP")
+
+        card_id = _seed_card_with_segment(
+            tmp_db, tmp_path,
+            seg_text="Ausbildung ist eine große Herausforderung.",
+            seg_start=5.0, seg_end=5.88,
+            clip_path="clips/1.mp3",
+        )
+
+        with patch("speakyer.nlp.audio_clipper.db", lambda: db(tmp_db)):
+            purged = purge_hallucinated_clips(storage=storage)
+
+        assert len(purged) == 1
+        assert purged[0]["card_id"] == card_id
+        assert not storage.exists("clips/1.mp3")
+
+        # DB should have audio_clip_path cleared.
+        with db(tmp_db) as conn:
+            row = conn.execute("SELECT audio_clip_path FROM cards WHERE id = ?", (card_id,)).fetchone()
+        assert row["audio_clip_path"] is None
+
+    def test_leaves_good_clips_alone(self, tmp_db, tmp_path):
+        """A 4-word segment in 2.5s (625ms/word) should NOT be purged."""
+        storage = LocalStorage(tmp_path / "data")
+        storage.write("clips/1.mp3", b"GOOD_CLIP")
+
+        card_id = _seed_card_with_segment(
+            tmp_db, tmp_path,
+            seg_text="Die Welt ist groß.",
+            seg_start=0.0, seg_end=2.5,
+            clip_path="clips/1.mp3",
+        )
+
+        with patch("speakyer.nlp.audio_clipper.db", lambda: db(tmp_db)):
+            purged = purge_hallucinated_clips(storage=storage)
+
+        assert len(purged) == 0
+        assert storage.exists("clips/1.mp3")
+
+        with db(tmp_db) as conn:
+            row = conn.execute("SELECT audio_clip_path FROM cards WHERE id = ?", (card_id,)).fetchone()
+        assert row["audio_clip_path"] == "clips/1.mp3"
+
+    def test_handles_missing_clip_file_gracefully(self, tmp_db, tmp_path):
+        """If the clip file is already gone from disk, still clear the DB."""
+        storage = LocalStorage(tmp_path / "data")
+        # Don't create the file — simulate it already being deleted.
+
+        card_id = _seed_card_with_segment(
+            tmp_db, tmp_path,
+            seg_text="Ausbildung ist eine große Herausforderung.",
+            seg_start=5.0, seg_end=5.88,
+            clip_path="clips/1.mp3",
+        )
+
+        with patch("speakyer.nlp.audio_clipper.db", lambda: db(tmp_db)):
+            purged = purge_hallucinated_clips(storage=storage)
+
+        assert len(purged) == 1
+
+        with db(tmp_db) as conn:
+            row = conn.execute("SELECT audio_clip_path FROM cards WHERE id = ?", (card_id,)).fetchone()
+        assert row["audio_clip_path"] is None
+
+    def test_skips_cards_without_clips(self, tmp_db, tmp_path):
+        """Cards with audio_clip_path = NULL are not touched."""
+        storage = LocalStorage(tmp_path / "data")
+
+        _seed_card_with_segment(
+            tmp_db, tmp_path,
+            seg_text="Ausbildung ist eine große Herausforderung.",
+            seg_start=5.0, seg_end=5.88,
+            clip_path=None,
+        )
+
+        with patch("speakyer.nlp.audio_clipper.db", lambda: db(tmp_db)):
+            purged = purge_hallucinated_clips(storage=storage)
+
+        assert len(purged) == 0
