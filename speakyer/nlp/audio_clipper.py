@@ -73,7 +73,7 @@ def purge_hallucinated_clips(
                 abs_clip.unlink()
 
             conn.execute(
-                "UPDATE cards SET audio_clip_path = NULL WHERE id = ?",
+                "UPDATE cards SET audio_clip_path = NULL, status = 'exported' WHERE id = ?",
                 (row["card_id"],),
             )
             purged.append({"card_id": row["card_id"], "clip_path": clip_rel})

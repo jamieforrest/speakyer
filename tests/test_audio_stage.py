@@ -465,10 +465,11 @@ class TestPurgeHallucinatedClips:
         assert purged[0]["card_id"] == card_id
         assert not storage.exists("clips/1.mp3")
 
-        # DB should have audio_clip_path cleared.
+        # DB should have audio_clip_path cleared and status reset to 'exported'.
         with db(tmp_db) as conn:
-            row = conn.execute("SELECT audio_clip_path FROM cards WHERE id = ?", (card_id,)).fetchone()
+            row = conn.execute("SELECT audio_clip_path, status FROM cards WHERE id = ?", (card_id,)).fetchone()
         assert row["audio_clip_path"] is None
+        assert row["status"] == "exported"
 
     def test_leaves_good_clips_alone(self, tmp_db, tmp_path):
         """A 4-word segment in 2.5s (625ms/word) should NOT be purged."""
