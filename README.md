@@ -14,9 +14,10 @@ the pipeline is designed to be language-agnostic from the ground up.
 1. Speakyer reads your `sources.yaml` to find podcast RSS feeds
 2. New episodes are downloaded and transcribed locally using Whisper (fast on Apple Silicon)
 3. Vocabulary is extracted, lemmatized, and tagged with CEFR level using spaCy
-4. Audio clips are extracted for each word's context sentence
-5. Flashcards with audio and context sentences are pushed to Anki via AnkiConnect
-6. Cards are tagged by level (`cefr::B2`), podcast, and date — study what you want in Anki
+4. Context sentences are translated locally using a bundled MarianMT model (no API key needed)
+5. Audio clips are extracted for each word's context sentence
+6. Flashcards with audio, context sentence, and translation are pushed to Anki via AnkiConnect
+7. Cards are tagged by level (`cefr::B2`), podcast, and date — study what you want in Anki
 
 ---
 
@@ -217,6 +218,7 @@ python -m pytest
 | `SPEAKYER_WHISPER_MODEL` | `mlx-community/whisper-large-v3-mlx` | Whisper model identifier |
 | `SPEAKYER_SPACY_MODEL` | `de_core_news_lg` | spaCy model for NLP/lemmatisation |
 | `SPEAKYER_ANKI_CONNECT_URL` | `http://localhost:8765` | AnkiConnect endpoint |
+| `SPEAKYER_TRANSLATION_MODEL` | `Helsinki-NLP/opus-mt-de-en` | HuggingFace translation model; set to `none` to disable |
 
 ---
 
@@ -230,7 +232,7 @@ python -m pytest
 | 3 | NLP pipeline + CEFR vocabulary tagging | Done |
 | 4 | Anki card generation | Done |
 | 5 | Pipeline runner + AnkiConnect export | Done |
-| 6 | Hardening, idempotency, v1 complete | In progress |
+| 6 | Hardening, idempotency, v1 complete | Done |
 | 7 | Audio clips in flashcards | Done |
 
 ---
