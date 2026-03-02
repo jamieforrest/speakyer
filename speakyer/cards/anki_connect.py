@@ -7,6 +7,7 @@ with a human-readable message so the pipeline stage can surface it cleanly.
 
 from __future__ import annotations
 
+import html
 import requests
 
 from speakyer.cards.base import Card
@@ -167,27 +168,24 @@ class AnkiConnectExporter(CardExporter):
         lower = sentence.lower()
         idx = lower.find(surface.lower())
         if idx != -1:
-            sentence = (
-                sentence[:idx]
-                + "<b>"
-                + sentence[idx : idx + len(surface)]
-                + "</b>"
-                + sentence[idx + len(surface) :]
-            )
-        return sentence
+            before = html.escape(sentence[:idx])
+            match = html.escape(sentence[idx : idx + len(surface)])
+            after = html.escape(sentence[idx + len(surface) :])
+            return f"{before}<b>{match}</b>{after}"
+        return html.escape(sentence)
 
     @staticmethod
     def _build_back(row) -> str:
-        parts = [f"{row['lemma']} · {row['pos']}"]
+        parts = [f"{html.escape(row['lemma'])} · {html.escape(row['pos'])}"]
         if row["cefr_level"]:
-            parts.append(f"CEFR {row['cefr_level']}")
-        parts.append(row["source_name"])
+            parts.append(f"CEFR {html.escape(row['cefr_level'])}")
+        parts.append(html.escape(row["source_name"]))
         if row["episode_title"]:
-            parts.append(f"<i>{row['episode_title']}</i>")
+            parts.append(f"<i>{html.escape(row['episode_title'])}</i>")
         back = " · ".join(parts)
         translation = row.get("translation") if isinstance(row, dict) else None
         if translation:
-            back += f"<br><i>{translation}</i>"
+            back += f"<br><i>{html.escape(translation)}</i>"
         return back
 
     @staticmethod

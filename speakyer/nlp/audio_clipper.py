@@ -127,10 +127,12 @@ class AudioClipper:
         storage: LocalStorage | None = None,
         clips_dir: str = _CLIPS_REL_DIR,
         padding_ms: int = _PADDING_MS,
+        db_path: "Path | None" = None,
     ) -> None:
         self._storage = storage
         self.clips_dir = clips_dir
         self.padding_ms = padding_ms
+        self._db_path = db_path
         # Per-instance caches so repeated calls for the same episode only load
         # the audio file and transcript JSON once each.
         self._audio_cache: dict[str, object] = {}   # path → AudioSegment
@@ -231,7 +233,8 @@ class AudioClipper:
 
     def _load_row(self, word_id: int):
         """Return a sqlite3.Row with all fields needed for clip extraction."""
-        with db() as conn:
+        db_ctx = db(self._db_path) if self._db_path is not None else db()
+        with db_ctx as conn:
             return conn.execute(
                 """
                 SELECT w.surface_form,

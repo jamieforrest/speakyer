@@ -71,9 +71,13 @@ class DownloadStage(PipelineStage):
             return ctx
 
         print(f"  Downloading: {ep.title!r} ...")
-        with requests.get(ep.audio_url, stream=True, timeout=120) as response:
-            response.raise_for_status()
-            audio_data = b"".join(response.iter_content(chunk_size=65536))
+        try:
+            with requests.get(ep.audio_url, stream=True, timeout=120) as response:
+                response.raise_for_status()
+                audio_data = b"".join(response.iter_content(chunk_size=65536))
+        except requests.RequestException as exc:
+            print(f"  [error] {ep.title!r}: download failed: {exc}")
+            return ctx
 
         storage.write(rel_path, audio_data)
         ctx.audio_path = storage.absolute_path(rel_path)
@@ -605,15 +609,17 @@ class AudioClipStage(PipelineStage):
     MP3 segment and stores the relative path in ``cards.audio_clip_path``.
 
     An injectable *clipper* enables testing without real audio files.
+    Pass *db_path* to ensure the clipper uses the same database as the stage.
     """
 
-    def __init__(self, clipper: AudioClipper | None = None) -> None:
+    def __init__(self, clipper: AudioClipper | None = None, db_path=None) -> None:
         self._clipper = clipper
+        self._db_path = db_path
 
     @property
     def clipper(self) -> AudioClipper:
         if self._clipper is None:
-            self._clipper = AudioClipper()
+            self._clipper = AudioClipper(db_path=self._db_path)
         return self._clipper
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -772,19 +778,21 @@ class CardUpdateStage(PipelineStage):
         total = len(rows)
         action_label = "Resyncing tags for" if ctx.resync_tags else "Updating"
         print(f"  {action_label} {total} Anki note(s) ...")
-        updated = failed = 0
+        updated = failed = consecutive_failures = 0
+        _MAX_CONSECUTIVE_FAILURES = 5
 
         for row in rows:
+            row_dict = dict(row)
             try:
-                abs_clip = storage.absolute_path(row["audio_clip_path"])
-                filename = f"speakyer_{row['anki_note_id']}.mp3"
+                abs_clip = storage.absolute_path(row_dict["audio_clip_path"])
+                filename = f"speakyer_{row_dict['anki_note_id']}.mp3"
                 note_payload = {
-                    "id": row["anki_note_id"],
+                    "id": row_dict["anki_note_id"],
                     "fields": {
-                        "Front": AnkiConnectExporter._build_front(row),
-                        "Back": AnkiConnectExporter._build_back(row),
+                        "Front": AnkiConnectExporter._build_front(row_dict),
+                        "Back": AnkiConnectExporter._build_back(row_dict),
                     },
-                    "tags": AnkiConnectExporter._build_tags(row),
+                    "tags": AnkiConnectExporter._build_tags(row_dict),
                     "audio": [
                         {
                             "path": str(abs_clip),
@@ -795,21 +803,29 @@ class CardUpdateStage(PipelineStage):
                 }
                 _invoke("updateNote", self.url, note=note_payload)
                 # Only advance status for cards that weren't already audio_updated.
-                if row["card_status"] == "exported":
+                if row_dict["card_status"] == "exported":
                     with db() as conn:
                         conn.execute(
                             "UPDATE cards SET status = 'audio_updated' WHERE id = ?",
-                            (row["card_id"],),
+                            (row_dict["card_id"],),
                         )
                 updated += 1
+                consecutive_failures = 0
                 if updated % 50 == 0:
                     print(f"    ... {updated}/{total}")
             except ConnectionError as exc:
                 print(f"  [error] {exc}")
                 return ctx
             except Exception as exc:  # noqa: BLE001
-                print(f"  [warn] note {row['anki_note_id']} failed: {exc}")
+                print(f"  [warn] note {row_dict['anki_note_id']} failed: {exc}")
                 failed += 1
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    print(
+                        f"  [error] {consecutive_failures} consecutive failures — "
+                        "aborting update (check model name or Anki state)"
+                    )
+                    return ctx
 
         msg = f"  {'Resynced tags for' if ctx.resync_tags else 'Updated'} {updated} note(s)"
         if failed:

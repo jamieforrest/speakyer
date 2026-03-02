@@ -315,13 +315,18 @@ class TestAudioClipStage:
     def _run(self, ep_id, tmp_db, tmp_path, *, dry_run=False, clipper=None):
         ep = Episode(id=ep_id, guid="g1", source_id=1, title="Ep 1", status="exported")
         ctx = PipelineContext(source_config=FAKE_SOURCE, episode=ep, dry_run=dry_run)
-        stage = AudioClipStage(clipper=clipper)
+        # Pass db_path so the lazily-created AudioClipper uses the same tmp_db.
+        stage = AudioClipStage(clipper=clipper, db_path=tmp_db)
         with patch("speakyer.pipeline.stages.db", lambda: db(tmp_db)):
             return stage.run(ctx)
 
     def test_skips_when_no_cards_need_clips(self, tmp_db, tmp_path, capsys):
         ep_id = seed_db(tmp_db, card_status="exported", audio_clip_path="clips/1.mp3")
-        self._run(ep_id, tmp_db, tmp_path)
+        # Write the clip file so the stale-file detection doesn't null the path.
+        storage = LocalStorage(tmp_path / "data")
+        storage.write("clips/1.mp3", b"CLIP")
+        clipper = AudioClipper(storage=storage, db_path=tmp_db)
+        self._run(ep_id, tmp_db, tmp_path, clipper=clipper)
         assert "[skip]" in capsys.readouterr().out
 
     def test_dry_run_makes_no_writes(self, tmp_db, tmp_path):

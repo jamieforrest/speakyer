@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS cefr_words (
     level TEXT NOT NULL,
     pos TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_words_episode_id ON words(episode_id);
+CREATE INDEX IF NOT EXISTS idx_cards_word_id ON cards(word_id);
+CREATE INDEX IF NOT EXISTS idx_cards_status ON cards(status);
 """
 
 TABLES = [
@@ -140,6 +144,9 @@ def db(db_path: Path | None = None) -> Generator[sqlite3.Connection, None, None]
 _MIGRATIONS = [
     "ALTER TABLE words ADD COLUMN sentence_end_time REAL",
     "ALTER TABLE words ADD COLUMN translation TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_words_episode_id ON words(episode_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cards_word_id ON cards(word_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cards_status ON cards(status)",
 ]
 
 
