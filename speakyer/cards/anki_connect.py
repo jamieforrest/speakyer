@@ -1,0 +1,201 @@
+"""AnkiConnect exporter — pushes pending cards to Anki desktop via HTTP API.
+
+AnkiConnect must be installed in Anki (add-on code 2055492159) and Anki must
+be running.  If the connection is refused the exporter raises ``ConnectionError``
+with a human-readable message so the pipeline stage can surface it cleanly.
+"""
+
+from __future__ import annotations
+
+import html
+import requests
+
+from speakyer.cards.base import Card
+from speakyer.exporters.base import CardExporter
+
+_DEFAULT_URL = "http://localhost:8765"
+_API_VERSION = 6
+
+
+def _invoke(action: str, url: str, *, timeout: int = 10, **params) -> object:
+    payload = {"action": action, "version": _API_VERSION, "params": params}
+    try:
+        resp = requests.post(url, json=payload, timeout=timeout)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        if isinstance(exc, requests.exceptions.Timeout):
+            raise ConnectionError(
+                "Request to AnkiConnect at %s timed out.\n"
+                "Try reducing batch size or restarting Anki." % url
+            )
+        raise ConnectionError(
+            "Could not connect to AnkiConnect at %s.\n"
+            "Make sure Anki is running and the AnkiConnect add-on (2055492159) is installed." % url
+        )
+    resp.raise_for_status()
+    body = resp.json()
+    error = body.get("error")
+    if error:
+        if isinstance(error, list):
+            # addNotes returns a list of per-note error strings when some notes
+            # are rejected (e.g. duplicates). The result array still contains
+            # valid note IDs (null for rejected notes) — not a fatal error.
+            pass
+        else:
+            raise RuntimeError("AnkiConnect error: %s" % error)
+    return body["result"]
+
+
+class AnkiConnectExporter(CardExporter):
+    """Export cards to Anki via AnkiConnect.
+
+    Each card row must be enriched with word/episode/source context before
+    calling :meth:`export`.  Use :meth:`build_note` to construct the note
+    payload from a DB row, or call :meth:`export_rows` directly with raw
+    query results.
+    """
+
+    def __init__(self, url: str = _DEFAULT_URL) -> None:
+        self.url = url
+
+    # ------------------------------------------------------------------
+    # CardExporter protocol
+    # ------------------------------------------------------------------
+
+    def export(self, cards: list[Card]) -> list[int]:
+        """Not used directly — call :meth:`export_rows` from ExportStage."""
+        raise NotImplementedError("Use export_rows() which has the full word context.")
+
+    # ------------------------------------------------------------------
+    # Main entry point used by ExportStage
+    # ------------------------------------------------------------------
+
+    BATCH_SIZE = 50  # notes per addNotes call
+    BATCH_TIMEOUT = 30  # seconds per batch request
+
+    MODEL_NAME = "Speakyer"
+
+    def export_rows(self, rows: list) -> list[int]:
+        """Push a batch of enriched card rows to Anki.
+
+        *rows* is a list of sqlite3.Row objects with the columns produced by
+        the ExportStage query (card_id, word_id, lemma, surface_form, pos,
+        cefr_level, example_sentence, deck_name, episode_title,
+        source_name, published_at).
+
+        Returns a list of Anki note IDs in the same order as *rows*.
+        Sends notes in batches of :attr:`BATCH_SIZE` to avoid HTTP timeouts.
+        """
+        self._ensure_deck(rows[0]["deck_name"] if rows else "Speakyer")
+        self._ensure_model()
+
+        notes = [self._build_note(row) for row in rows]
+        all_ids: list[int] = []
+
+        for start in range(0, len(notes), self.BATCH_SIZE):
+            batch = notes[start : start + self.BATCH_SIZE]
+            end = min(start + self.BATCH_SIZE, len(notes))
+            print(f"    ... batch {start + 1}–{end} of {len(notes)}", flush=True)
+            result: list = _invoke(  # type: ignore[assignment]
+                "addNotes", self.url, timeout=self.BATCH_TIMEOUT, notes=batch
+            )
+            all_ids.extend(nid or 0 for nid in result)
+
+        return all_ids
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_deck(self, deck_name: str) -> None:
+        _invoke("createDeck", self.url, deck=deck_name)
+
+    def _ensure_model(self) -> None:
+        """Create the Speakyer note type if it doesn't already exist.
+
+        Uses a single Front→Back card template so Anki never generates a
+        reversed card for the same note.
+        """
+        existing: list = _invoke("modelNames", self.url)  # type: ignore[assignment]
+        if self.MODEL_NAME in existing:
+            return
+        _invoke(
+            "createModel",
+            self.url,
+            modelName=self.MODEL_NAME,
+            inOrderFields=["Front", "Back"],
+            css=(
+                ".card { font-family: Arial; font-size: 18px; text-align: left; }"
+                " b { color: #2060a0; }"
+            ),
+            cardTemplates=[
+                {
+                    "Name": "Recognition",
+                    "Front": "{{Front}}",
+                    "Back": "{{FrontSide}}<hr id=answer>{{Back}}",
+                }
+            ],
+        )
+
+    def _build_note(self, row) -> dict:
+        front = self._build_front(row)
+        back = self._build_back(row)
+        tags = self._build_tags(row)
+        note: dict = {
+            "deckName": row["deck_name"],
+            "modelName": self.MODEL_NAME,
+            "fields": {"Front": front, "Back": back},
+            "tags": tags,
+            "options": {"allowDuplicate": True},
+        }
+        # Include audio attachment when ExportStage has pre-resolved the clip path.
+        # rows are converted to dicts by ExportStage before being passed here.
+        clip_path = row.get("audio_clip_abs_path") if isinstance(row, dict) else None
+        if clip_path:
+            note["audio"] = [
+                {
+                    "path": str(clip_path),
+                    "filename": f"speakyer_{row['word_id']}.mp3",
+                    "fields": ["Front"],
+                }
+            ]
+        return note
+
+    @staticmethod
+    def _build_front(row) -> str:
+        sentence = (row["example_sentence"] or "").strip()
+        surface = row["surface_form"]
+        # Bold the first case-insensitive match of the surface form.
+        lower = sentence.lower()
+        idx = lower.find(surface.lower())
+        if idx != -1:
+            before = html.escape(sentence[:idx])
+            match = html.escape(sentence[idx : idx + len(surface)])
+            after = html.escape(sentence[idx + len(surface) :])
+            return f"{before}<b>{match}</b>{after}"
+        return html.escape(sentence)
+
+    @staticmethod
+    def _build_back(row) -> str:
+        parts = [f"{html.escape(row['lemma'])} · {html.escape(row['pos'])}"]
+        if row["cefr_level"]:
+            parts.append(f"CEFR {html.escape(row['cefr_level'])}")
+        parts.append(html.escape(row["source_name"]))
+        if row["episode_title"]:
+            parts.append(f"<i>{html.escape(row['episode_title'])}</i>")
+        back = " · ".join(parts)
+        translation = row.get("translation") if isinstance(row, dict) else None
+        if translation:
+            back += f"<br><i>{html.escape(translation)}</i>"
+        return back
+
+    @staticmethod
+    def _build_tags(row) -> list[str]:
+        tags = ["speakyer"]
+        if row["cefr_level"]:
+            tags.append(f"cefr::{row['cefr_level']}")
+        source = row["source_name"].replace(" ", "_").lower()
+        tags.append(f"podcast::{source}")
+        if row["published_at"]:
+            date = str(row["published_at"])[:10]  # keep YYYY-MM-DD only
+            tags.append(f"date::{date}")
+        return tags
