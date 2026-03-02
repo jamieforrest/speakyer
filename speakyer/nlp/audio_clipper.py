@@ -180,6 +180,8 @@ class AudioClipper:
             sent_text = row["seg_text"] or ""
 
             # Load the transcript JSON to resolve exact segment boundaries.
+            if row["raw_json_path"] is None:
+                return None
             json_path = self.storage.absolute_path(row["raw_json_path"])
             if not json_path.exists():
                 return None
